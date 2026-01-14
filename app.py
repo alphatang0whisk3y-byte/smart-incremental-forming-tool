@@ -1,172 +1,75 @@
 import streamlit as st
 import numpy as np
-import pandas as pd
-import plotly.express as px
+import matplotlib.pyplot as plt
 
-# ================= PAGE CONFIG =================
-st.set_page_config(
-    page_title="Smart Incremental Forming Tool",
-    layout="wide"
-)
+# Page configuration
+st.set_page_config(page_title="Smart Incremental Forming Tool", layout="wide")
 
-# ================= TITLE =================
-st.title("Smart Incremental Forming Tool")
-st.markdown(
-    "### Interactive web-based interface for tool-path generation, prediction and FEM comparison"
-)
+# Title
+st.title("Smart Incremental Forming Tool – Interactive Interface")
+st.markdown("This interface allows you to control the essential forming parameters and visualize the process behavior.")
 
-st.markdown("---")
-
-# ================= SIDEBAR =================
-st.sidebar.header("🔧 Tool Parameters")
-
-tool_diameter = st.sidebar.slider(
-    "Tool Diameter (mm)", 5.0, 20.0, 10.0
-)
-
-tool_radius = st.sidebar.slider(
-    "Tool Tip Radius (mm)", 1.0, 10.0, 5.0
-)
-
-st.sidebar.header("⚙️ Process Parameters")
+# Sidebar
+st.sidebar.header("Tool Parameters")
 
 step_size = st.sidebar.slider(
-    "Step Size Δz (mm)", 0.1, 1.0, 0.5
+    "Step Size (mm)",
+    min_value=0.1,
+    max_value=2.0,
+    value=0.5,
+    step=0.1
 )
 
-feed_rate = st.sidebar.slider(
-    "Feed Rate (mm/s)", 100, 1000, 300
-)
-
-spindle_speed = st.sidebar.slider(
-    "Spindle Speed (RPM)", 0, 5000, 1500
+tool_diameter = st.sidebar.slider(
+    "Tool Diameter (mm)",
+    min_value=5.0,
+    max_value=20.0,
+    value=10.0,
+    step=0.5
 )
 
 forming_depth = st.sidebar.slider(
-    "Target Forming Depth (mm)", 5.0, 50.0, 20.0
+    "Forming Depth (mm)",
+    min_value=1.0,
+    max_value=50.0,
+    value=20.0,
+    step=1.0
 )
 
-generate = st.sidebar.button("▶ Generate Results")
+st.sidebar.markdown("---")
+st.sidebar.success("Simplified interface: only essential parameters shown")
 
-# ================= DATA GENERATION =================
-t = np.linspace(0, 2*np.pi, 300)
+# Display selected parameters
+st.subheader("Selected Parameters")
+col1, col2, col3 = st.columns(3)
 
-x = 50 * np.cos(t)
-y = 50 * np.sin(t)
-z = -np.linspace(0, forming_depth, len(t))
+with col1:
+    st.metric("Step Size (mm)", step_size)
 
-# Simple prediction model (for academic demonstration)
-pred_thickness = (
-    1.5
-    - 0.002 * np.abs(z)
-    - 0.0001 * feed_rate
-    + 0.00005 * tool_diameter
-)
+with col2:
+    st.metric("Tool Diameter (mm)", tool_diameter)
 
-pred_df = pd.DataFrame({
-    "x": x,
-    "y": y,
-    "thickness": pred_thickness
-})
+with col3:
+    st.metric("Forming Depth (mm)", forming_depth)
 
-# ================= TABS =================
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["🔧 Tool Path", "📐 Predicted Result", "🧪 FEM Result", "📊 Comparison"]
-)
+# Dummy simulation logic (replace later with real FEM / model)
+st.subheader("Simulation Preview")
 
-# ================= TAB 1: TOOL PATH =================
-with tab1:
-    st.subheader("3D Tool Path Visualization")
-    st.markdown(
-        "Generated tool path based on the selected process parameters."
-    )
+x = np.linspace(0, forming_depth, 100)
+y = np.sin(x / (step_size + 0.1)) * tool_diameter / 10
 
-    if generate:
-        fig = px.line_3d(
-            x=x, y=y, z=z,
-            labels={"x": "X (mm)", "y": "Y (mm)", "z": "Z (mm)"}
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Set parameters and click **Generate Results**.")
+fig, ax = plt.subplots()
+ax.plot(x, y, linewidth=2)
+ax.set_xlabel("Depth (mm)")
+ax.set_ylabel("Deformation (arbitrary units)")
+ax.set_title("Simulated Forming Profile")
+ax.grid(True)
 
-# ================= TAB 2: PREDICTED RESULT =================
-with tab2:
-    st.subheader("Predicted Thickness Distribution")
-    st.markdown(
-        "Thickness distribution predicted using a simplified analytical model."
-    )
+st.pyplot(fig)
 
-    if generate:
-        fig = px.scatter(
-            pred_df,
-            x="x", y="y",
-            color="thickness",
-            labels={"thickness": "Thickness (mm)"}
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("Prediction will appear after generation.")
-
-# ================= TAB 3: FEM RESULT =================
-with tab3:
-    st.subheader("FEM Simulation Result")
-    st.markdown(
-        "Upload FEM simulation results in CSV format for visualization."
-    )
-
-    fem_file = st.file_uploader(
-        "Upload FEM CSV file (columns: x, y, thickness)",
-        type=["csv"]
-    )
-
-    if fem_file is not None:
-        fem_df = pd.read_csv(fem_file)
-
-        fig = px.scatter(
-            fem_df,
-            x="x", y="y",
-            color="thickness",
-            labels={"thickness": "Thickness (mm)"}
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.success("FEM data loaded successfully.")
-    else:
-        st.info("Awaiting FEM CSV upload.")
-
-# ================= TAB 4: COMPARISON =================
-with tab4:
-    st.subheader("Prediction vs FEM Comparison")
-    st.markdown(
-        "Quantitative comparison between predicted results and FEM simulations."
-    )
-
-    if generate and fem_file is not None:
-        min_len = min(len(pred_df), len(fem_df))
-        error = pred_df["thickness"][:min_len] - fem_df["thickness"][:min_len]
-
-        comp_df = pd.DataFrame({
-            "Index": np.arange(min_len),
-            "Thickness Error (mm)": error
-        })
-
-        fig = px.line(
-            comp_df,
-            x="Index",
-            y="Thickness Error (mm)"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.metric(
-            "Mean Absolute Error (mm)",
-            f"{np.mean(np.abs(error)):.4f}"
-        )
-    else:
-        st.info("Generate results and upload FEM data to compare.")
-
-# ================= FOOTER =================
+# Footer
 st.markdown("---")
-st.caption(
-    "PS4 – Smart Incremental Forming Tool calibrated with FEM | "
-    "Permanent Streamlit Cloud deployment"
+st.markdown(
+    "<center><small>Smart Incremental Forming Tool | Streamlit Interface</small></center>",
+    unsafe_allow_html=True
 )
