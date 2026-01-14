@@ -1,111 +1,152 @@
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
+import pandas as pd
+import plotly.express as px
 
-# Page config
+# ================= PAGE CONFIG =================
 st.set_page_config(
     page_title="Smart Incremental Forming Tool",
     layout="wide"
 )
 
-# Title
-st.title("Smart Incremental Forming Tool (Calibrated with FEM)")
-
-# Create Tabs
-tab1, tab2, tab3 = st.tabs(["🏠 Home", "🎯 Aim", "⚙ Methodology"])
-
-# -------------------- SIDEBAR --------------------
-st.sidebar.header("Forming Parameters")
-
-step_size = st.sidebar.slider(
-    "Step Size (mm)",
-    min_value=0.1,
-    max_value=2.0,
-    value=0.5,
-    step=0.1
+# ================= TITLE =================
+st.title("Smart Incremental Forming Tool")
+st.markdown(
+    "### Interactive web-based interface for tool-path generation, prediction and FEM comparison"
 )
+st.markdown("---")
+
+# ================= SIDEBAR =================
+st.sidebar.header("🔧 Tool Parameters")
 
 tool_diameter = st.sidebar.slider(
-    "Tool Diameter (mm)",
-    min_value=5.0,
-    max_value=20.0,
-    value=10.0,
-    step=0.5
+    "Tool Diameter (mm)", 5.0, 20.0, 10.0
+)
+
+tool_radius = st.sidebar.slider(
+    "Tool Tip Radius (mm)", 1.0, 10.0, 5.0
+)
+
+st.sidebar.header("⚙️ Process Parameters")
+
+step_size = st.sidebar.slider(
+    "Step Size Δz (mm)", 0.1, 1.0, 0.5
 )
 
 forming_depth = st.sidebar.slider(
-    "Forming Depth (mm)",
-    min_value=1.0,
-    max_value=50.0,
-    value=20.0,
-    step=1.0
+    "Target Forming Depth (mm)", 5.0, 50.0, 20.0
 )
 
-st.sidebar.markdown("---")
-st.sidebar.success("Feed Rate and Spindle Speed removed")
+generate = st.sidebar.button("▶ Generate Results")
 
-# -------------------- TAB 1 : HOME --------------------
+# ================= DATA GENERATION =================
+t = np.linspace(0, 2*np.pi, 300)
+x = 50 * np.cos(t)
+y = 50 * np.sin(t)
+z = -np.linspace(0, forming_depth, len(t))
+
+# Simplified prediction model (academic demo)
+pred_thickness = (
+    1.5
+    - 0.002 * np.abs(z)
+    + 0.00005 * tool_diameter
+)
+
+pred_df = pd.DataFrame({
+    "x": x,
+    "y": y,
+    "thickness": pred_thickness
+})
+
+# ================= TABS =================
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["🔧 Tool Path", "📐 Predicted Result", "🧪 FEM Result", "📊 Comparison"]
+)
+
+# ================= TAB 1: TOOL PATH =================
 with tab1:
-    st.subheader("Interactive Simulation Interface")
+    st.subheader("3D Tool Path Visualization")
+    st.markdown(
+        "Generated tool path based on the selected process parameters."
+    )
+    if generate:
+        fig = px.line_3d(
+            x=x, y=y, z=z,
+            labels={"x": "X (mm)", "y": "Y (mm)", "z": "Z (mm)"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Set parameters and click **Generate Results**.")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Step Size (mm)", step_size)
-    with col2:
-        st.metric("Tool Diameter (mm)", tool_diameter)
-    with col3:
-        st.metric("Forming Depth (mm)", forming_depth)
-
-    st.markdown("---")
-
-    st.subheader("Simulated Forming Profile")
-
-    # Dummy simulation logic
-    x = np.linspace(0, forming_depth, 100)
-    y = np.sin(x / (step_size + 0.1)) * (tool_diameter / 10)
-
-    fig, ax = plt.subplots()
-    ax.plot(x, y, linewidth=2)
-    ax.set_xlabel("Depth (mm)")
-    ax.set_ylabel("Deformation (arbitrary units)")
-    ax.set_title("Incremental Forming Profile (Preview)")
-    ax.grid(True)
-
-    st.pyplot(fig)
-
-# -------------------- TAB 2 : AIM --------------------
+# ================= TAB 2: PREDICTED RESULT =================
 with tab2:
-    st.subheader("Aim of the Project")
-    st.write("""
-    The aim of this project is to develop a **Smart Incremental Forming Tool** 
-    calibrated using **Finite Element Method (FEM)** to accurately predict 
-    deformation behavior and optimize process parameters in incremental sheet 
-    forming operations.
-    
-    This web-based interface provides an interactive environment to:
-    - Control essential forming parameters
-    - Visualize forming behavior
-    - Support FEM-based calibration and validation
-    """)
+    st.subheader("Predicted Thickness Distribution")
+    st.markdown(
+        "Thickness distribution predicted using a simplified analytical model."
+    )
+    if generate:
+        fig = px.scatter(
+            pred_df,
+            x="x", y="y",
+            color="thickness",
+            labels={"thickness": "Thickness (mm)"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Prediction will appear after generation.")
 
-# -------------------- TAB 3 : METHODOLOGY --------------------
+# ================= TAB 3: FEM RESULT =================
 with tab3:
-    st.subheader("Methodology / Workflow")
-    st.write("""
-    1. Select the forming parameters using the sidebar  
-    2. Provide input values such as:
-       - Step Size  
-       - Tool Diameter  
-       - Forming Depth  
-    3. The model processes these inputs  
-    4. Simulated forming profile is generated  
-    5. FEM calibration is applied for accuracy  
-    6. Results are analyzed and optimized  
-    """)
+    st.subheader("FEM Simulation Result")
+    st.markdown(
+        "Upload FEM simulation results in CSV format for visualization."
+    )
+    fem_file = st.file_uploader(
+        "Upload FEM CSV file (columns: x, y, thickness)",
+        type=["csv"]
+    )
+    if fem_file is not None:
+        fem_df = pd.read_csv(fem_file)
+        fig = px.scatter(
+            fem_df,
+            x="x", y="y",
+            color="thickness",
+            labels={"thickness": "Thickness (mm)"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.success("FEM data loaded successfully.")
+    else:
+        st.info("Awaiting FEM CSV upload.")
 
-# -------------------- FOOTER --------------------
+# ================= TAB 4: COMPARISON =================
+with tab4:
+    st.subheader("Prediction vs FEM Comparison")
+    st.markdown(
+        "Quantitative comparison between predicted results and FEM simulations."
+    )
+    if generate and fem_file is not None:
+        min_len = min(len(pred_df), len(fem_df))
+        error = pred_df["thickness"][:min_len] - fem_df["thickness"][:min_len]
+        comp_df = pd.DataFrame({
+            "Index": np.arange(min_len),
+            "Thickness Error (mm)": error
+        })
+        fig = px.line(
+            comp_df,
+            x="Index",
+            y="Thickness Error (mm)"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.metric(
+            "Mean Absolute Error (mm)",
+            f"{np.mean(np.abs(error)):.4f}"
+        )
+    else:
+        st.info("Generate results and upload FEM data to compare.")
+
+# ================= FOOTER =================
 st.markdown("---")
-st.markdown(
-    "<center><small>Smart Incremental Forming Tool | Streamlit Web Interface</small></center>",
-    unsafe_allow_html=True
+st.caption(
+    "PS4 – Smart Incremental Forming Tool calibrated with FEM | "
+    "Permanent Streamlit Cloud deployment"
 )
