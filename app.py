@@ -2,15 +2,20 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Page configuration
-st.set_page_config(page_title="Smart Incremental Forming Tool", layout="wide")
+# Page config
+st.set_page_config(
+    page_title="Smart Incremental Forming Tool",
+    layout="wide"
+)
 
 # Title
-st.title("Smart Incremental Forming Tool – Interactive Interface")
-st.markdown("This interface allows you to control the essential forming parameters and visualize the process behavior.")
+st.title("Smart Incremental Forming Tool (Calibrated with FEM)")
 
-# Sidebar
-st.sidebar.header("Tool Parameters")
+# Create Tabs
+tab1, tab2, tab3 = st.tabs(["🏠 Home", "🎯 Aim", "⚙ Methodology"])
+
+# -------------------- SIDEBAR --------------------
+st.sidebar.header("Forming Parameters")
 
 step_size = st.sidebar.slider(
     "Step Size (mm)",
@@ -37,39 +42,70 @@ forming_depth = st.sidebar.slider(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.success("Simplified interface: only essential parameters shown")
+st.sidebar.success("Feed Rate and Spindle Speed removed")
 
-# Display selected parameters
-st.subheader("Selected Parameters")
-col1, col2, col3 = st.columns(3)
+# -------------------- TAB 1 : HOME --------------------
+with tab1:
+    st.subheader("Interactive Simulation Interface")
 
-with col1:
-    st.metric("Step Size (mm)", step_size)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Step Size (mm)", step_size)
+    with col2:
+        st.metric("Tool Diameter (mm)", tool_diameter)
+    with col3:
+        st.metric("Forming Depth (mm)", forming_depth)
 
-with col2:
-    st.metric("Tool Diameter (mm)", tool_diameter)
+    st.markdown("---")
 
-with col3:
-    st.metric("Forming Depth (mm)", forming_depth)
+    st.subheader("Simulated Forming Profile")
 
-# Dummy simulation logic (replace later with real FEM / model)
-st.subheader("Simulation Preview")
+    # Dummy simulation logic
+    x = np.linspace(0, forming_depth, 100)
+    y = np.sin(x / (step_size + 0.1)) * (tool_diameter / 10)
 
-x = np.linspace(0, forming_depth, 100)
-y = np.sin(x / (step_size + 0.1)) * tool_diameter / 10
+    fig, ax = plt.subplots()
+    ax.plot(x, y, linewidth=2)
+    ax.set_xlabel("Depth (mm)")
+    ax.set_ylabel("Deformation (arbitrary units)")
+    ax.set_title("Incremental Forming Profile (Preview)")
+    ax.grid(True)
 
-fig, ax = plt.subplots()
-ax.plot(x, y, linewidth=2)
-ax.set_xlabel("Depth (mm)")
-ax.set_ylabel("Deformation (arbitrary units)")
-ax.set_title("Simulated Forming Profile")
-ax.grid(True)
+    st.pyplot(fig)
 
-st.pyplot(fig)
+# -------------------- TAB 2 : AIM --------------------
+with tab2:
+    st.subheader("Aim of the Project")
+    st.write("""
+    The aim of this project is to develop a **Smart Incremental Forming Tool** 
+    calibrated using **Finite Element Method (FEM)** to accurately predict 
+    deformation behavior and optimize process parameters in incremental sheet 
+    forming operations.
+    
+    This web-based interface provides an interactive environment to:
+    - Control essential forming parameters
+    - Visualize forming behavior
+    - Support FEM-based calibration and validation
+    """)
 
-# Footer
+# -------------------- TAB 3 : METHODOLOGY --------------------
+with tab3:
+    st.subheader("Methodology / Workflow")
+    st.write("""
+    1. Select the forming parameters using the sidebar  
+    2. Provide input values such as:
+       - Step Size  
+       - Tool Diameter  
+       - Forming Depth  
+    3. The model processes these inputs  
+    4. Simulated forming profile is generated  
+    5. FEM calibration is applied for accuracy  
+    6. Results are analyzed and optimized  
+    """)
+
+# -------------------- FOOTER --------------------
 st.markdown("---")
 st.markdown(
-    "<center><small>Smart Incremental Forming Tool | Streamlit Interface</small></center>",
+    "<center><small>Smart Incremental Forming Tool | Streamlit Web Interface</small></center>",
     unsafe_allow_html=True
 )
