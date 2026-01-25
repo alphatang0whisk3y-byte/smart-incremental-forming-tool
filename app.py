@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from sklearn.preprocessing import PolynomialFeatures
 
 # ================= PAGE CONFIG =================
 st.set_page_config(
@@ -24,16 +23,20 @@ def predict_thickness_ml(tool_diameter, step_size, depth):
     Features: [1, tool_diameter, step_size, depth, tool_diameter^2, 
                tool_diameter*step_size, tool_diameter*depth]
     """
-    # Create feature vector matching the polynomial features used in training
-    features = np.array([[tool_diameter, step_size, depth]])
-    poly = PolynomialFeatures(degree=2, include_bias=False)
-    features_poly = poly.fit_transform(features)
-    
-    # Add bias term (1.0) at the beginning
-    features_with_bias = np.concatenate([[1.0], features_poly[0]])
+    # Manually create polynomial features (degree 2)
+    # Order: [bias, d, s, z, d^2, d*s, d*z]
+    features = np.array([
+        1.0,                        # bias
+        tool_diameter,              # d
+        step_size,                  # s
+        depth,                      # z
+        tool_diameter ** 2,         # d^2
+        tool_diameter * step_size,  # d*s
+        tool_diameter * depth       # d*z
+    ])
     
     # Calculate prediction
-    thickness = np.dot(ML_COEFFICIENTS, features_with_bias)
+    thickness = np.dot(ML_COEFFICIENTS, features)
     
     return thickness
 
