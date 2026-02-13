@@ -3,8 +3,10 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import pickle
 from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 # ================= PAGE CONFIG =================
 st.set_page_config(
@@ -13,23 +15,94 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ================= LOAD ML MODEL =================
+# ================= TRAIN ML MODEL FROM CSV =================
 @st.cache_resource
-def load_ml_model():
-    """Load the trained ML model and components"""
+def train_ml_model_from_csv():
+    """Train ML model from CSV data"""
     try:
-        with open('best_combined_model.pkl', 'rb') as f:
-            model_data = pickle.load(f)
+        # Load training data
+        df = pd.read_csv('simulation_results_progress_0300.csv')
+        
+        # Filter only successful simulations
+        df = df[df['status'] == 'SUCCESS'].copy()
+        
+        # Drop rows with missing target variable
+        df = df.dropna(subset=['max_stress_MPa'])
+        
+        # Feature engineering
+        df['depth'] = df['depth_input_mm']
+        
+        # Fill missing parameter columns with reasonable defaults
+        df['param_radius_filled'] = df['param_radius'].fillna(10.0)
+        df['param_max_radius_filled'] = df['param_max_radius'].fillna(df['param_radius_filled'] * 1.5)
+        df['param_side_length_filled'] = df['param_side_length'].fillna(12.0)
+        
+        # Polynomial features
+        df['depth_squared'] = df['depth'] ** 2
+        df['radius_squared'] = df['param_radius_filled'] ** 2
+        df['max_radius_squared'] = df['param_max_radius_filled'] ** 2
+        
+        # Encode path type
+        encoder = LabelEncoder()
+        df['path_encoded'] = encoder.fit_transform(df['path_type'])
+        
+        # Define features
+        feature_cols = [
+            'depth', 'path_encoded', 'param_radius_filled', 
+            'param_max_radius_filled', 'param_side_length_filled',
+            'depth_squared', 'radius_squared', 'max_radius_squared'
+        ]
+        
+        X = df[feature_cols]
+        y = df['max_stress_MPa']
+        
+        # Train-test split
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+        
+        # Train Ridge regression model
+        model = Ridge(alpha=1.0)
+        model.fit(X_train, y_train)
+        
+        # Evaluate
+        y_pred = model.predict(X_test)
+        mae = mean_absolute_error(y_test, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+        r2 = r2_score(y_test, y_pred)
+        
+        # Get unique path types
+        path_types = sorted(df['path_type'].unique().tolist())
+        
+        model_data = {
+            'model': model,
+            'encoder': encoder,
+            'feature_cols': feature_cols,
+            'path_types': path_types,
+            'mae': mae,
+            'rmse': rmse,
+            'r2': r2,
+            'training_samples': len(df),
+            'feature_set_name': 'polynomial_v1'
+        }
+        
+        st.success(f"✅ Model trained successfully! R² = {r2:.3f}, RMSE = {rmse:.2f} MPa")
+        
         return model_data
+        
+    except FileNotFoundError:
+        st.error("❌ Training data file 'simulation_results_progress_0300.csv' not found!")
+        st.info("Please upload the CSV file to the same directory as this script.")
+        return None
     except Exception as e:
-        st.error(f"Error loading model: {e}")
+        st.error(f"❌ Error training model: {e}")
         return None
 
-# Load model
-model_data = load_ml_model()
+# Load/train model
+with st.spinner("🔄 Training ML model from data..."):
+    model_data = train_ml_model_from_csv()
 
 if model_data is None:
-    st.error("⚠️ Failed to load ML model. Please ensure 'best_combined_model.pkl' is in the same directory.")
     st.stop()
 
 # Extract model components
@@ -41,15 +114,9 @@ path_types = model_data['path_types']
 # ================= HELPER FUNCTIONS =================
 
 def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
-    """
-    Prepare features for ML prediction
-    Features: ['depth', 'path_encoded', 'param_radius_filled', 'param_max_radius_filled', 
-               'param_side_length_filled', 'depth_squared', 'radius_squared', 'max_radius_squared']
-    """
-    # Encode path type
+    """Prepare features for ML prediction"""
     path_encoded = encoder.transform([path_type])[0]
     
-    # Create features
     features = {
         'depth': depth,
         'path_encoded': path_encoded,
@@ -61,7 +128,6 @@ def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0,
         'max_radius_squared': param_max_radius ** 2
     }
     
-    # Convert to array in correct order
     feature_array = np.array([[features[col] for col in feature_cols]])
     return feature_array
 
@@ -79,16 +145,14 @@ def find_best_path(depth, param_radius=10.0, param_max_radius=15.0, param_side_l
         try:
             stress = predict_stress(path, depth, param_radius, param_max_radius, param_side_length)
             predictions[path] = stress
-        except Exception as e:
+        except:
             predictions[path] = None
     
-    # Remove None values
     valid_predictions = {k: v for k, v in predictions.items() if v is not None}
     
     if not valid_predictions:
         return None, None, {}
     
-    # Find minimum stress path
     best_path = min(valid_predictions, key=valid_predictions.get)
     best_stress = valid_predictions[best_path]
     
@@ -117,7 +181,6 @@ def generate_path_geometry(path_type, depth, num_points=300):
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'square':
-        # Square path
         side = 40
         x = np.concatenate([
             np.linspace(-side, side, num_points//4),
@@ -134,7 +197,6 @@ def generate_path_geometry(path_type, depth, num_points=300):
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'hexagon':
-        # Hexagon path
         angles = np.linspace(0, 2*np.pi, 7)
         radius = 40
         hex_x = radius * np.cos(angles)
@@ -144,7 +206,6 @@ def generate_path_geometry(path_type, depth, num_points=300):
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'star':
-        # Star pattern
         outer_r, inner_r = 50, 25
         points = 5
         angles = np.linspace(0, 2*np.pi, points*2+1)
@@ -156,35 +217,30 @@ def generate_path_geometry(path_type, depth, num_points=300):
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'rose':
-        # Rose curve
-        k = 3  # petals
+        k = 3
         radius = 50 * np.cos(k * t)
         x = radius * np.cos(t)
         y = radius * np.sin(t)
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'ellipse':
-        # Ellipse
-        a, b = 50, 30  # major, minor axis
+        a, b = 50, 30
         x = a * np.cos(t)
         y = b * np.sin(t)
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'zigzag':
-        # Zigzag pattern
         x = 40 * np.sin(t * 5)
         y = np.linspace(-40, 40, num_points)
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'figure8':
-        # Figure-8 / Lemniscate
         scale = 30
         x = scale * np.sin(t)
         y = scale * np.sin(t) * np.cos(t)
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'concentric':
-        # Concentric circles
         num_circles = 3
         radius = 50 * (1 - (t / (2*np.pi)) % (1/num_circles) * num_circles)
         x = radius * np.cos(t * num_circles)
@@ -192,7 +248,6 @@ def generate_path_geometry(path_type, depth, num_points=300):
         z = -np.linspace(0, depth, num_points)
         
     elif path_type == 'lissajous':
-        # Lissajous curve
         A, B = 40, 30
         a, b = 3, 4
         x = A * np.sin(a * t)
@@ -200,7 +255,6 @@ def generate_path_geometry(path_type, depth, num_points=300):
         z = -np.linspace(0, depth, num_points)
         
     else:
-        # Default to circular
         radius = 50
         x = radius * np.cos(t)
         y = radius * np.sin(t)
@@ -223,13 +277,6 @@ st.markdown("""
         color: #666;
         text-align: center;
         margin-bottom: 2rem;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
     }
     .recommendation-box {
         background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -259,7 +306,6 @@ st.markdown("---")
 # ================= SIDEBAR =================
 st.sidebar.header("🎯 Input Parameters")
 
-# Shape selection
 st.sidebar.subheader("📐 Shape Selection")
 shape_input = st.sidebar.selectbox(
     "Select Shape Type",
@@ -267,7 +313,6 @@ shape_input = st.sidebar.selectbox(
     help="Choose 'Auto' to let ML find the best path type"
 )
 
-# Depth input
 depth_input = st.sidebar.slider(
     "Forming Depth (mm)",
     min_value=1.0,
@@ -277,22 +322,18 @@ depth_input = st.sidebar.slider(
     help="Target forming depth"
 )
 
-# Advanced parameters
 st.sidebar.subheader("⚙️ Advanced Parameters")
 with st.sidebar.expander("Shape Parameters"):
     param_radius = st.slider("Radius (mm)", 5.0, 20.0, 10.0, 0.5)
     param_max_radius = st.slider("Max Radius (mm)", 10.0, 25.0, 15.0, 0.5)
     param_side_length = st.slider("Side Length (mm)", 8.0, 20.0, 12.0, 0.5)
 
-# Display options
 st.sidebar.subheader("📊 Visualization")
 num_points = st.sidebar.slider("Path Resolution", 100, 500, 300, 50)
 show_comparison = st.sidebar.checkbox("Show All Path Comparisons", value=True)
 
-# Generate button
 generate = st.sidebar.button("🚀 Generate & Predict", type="primary", use_container_width=True)
 
-# Model info in sidebar
 st.sidebar.markdown("---")
 st.sidebar.subheader("🤖 Model Information")
 st.sidebar.info(f"""
@@ -300,15 +341,14 @@ st.sidebar.info(f"""
 **Features:** {len(feature_cols)}  
 **Training Samples:** {model_data['training_samples']}  
 **R² Score:** {model_data['r2']:.3f}  
-**RMSE:** {model_data['rmse']:.2f} MPa
+**RMSE:** {model_data['rmse']:.2f} MPa  
+**MAE:** {model_data['mae']:.2f} MPa
 """)
 
 # ================= MAIN CONTENT =================
 
 if generate:
-    # Determine which path to use
     if shape_input == 'Auto (ML Recommends)':
-        # Find best path automatically
         with st.spinner("🔍 Analyzing all path types to find optimal solution..."):
             best_path, best_stress, all_predictions = find_best_path(
                 depth_input, param_radius, param_max_radius, param_side_length
@@ -318,7 +358,6 @@ if generate:
             st.error("❌ Failed to generate predictions. Please check input parameters.")
             st.stop()
         
-        # Display recommendation
         st.markdown(f"""
         <div class="recommendation-box">
             🎯 RECOMMENDED PATH TYPE: <strong>{best_path.upper()}</strong><br>
@@ -330,7 +369,6 @@ if generate:
         predicted_stress = best_stress
         
     else:
-        # Use user-selected path
         selected_path = shape_input
         predicted_stress = predict_stress(
             selected_path, depth_input, param_radius, param_max_radius, param_side_length
@@ -350,30 +388,16 @@ if generate:
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric(
-            "Max Stress",
-            f"{predicted_stress:.2f} MPa",
-            help="Predicted maximum stress"
-        )
+        st.metric("Max Stress", f"{predicted_stress:.2f} MPa")
     
     with col2:
-        # Estimate strain (simplified relationship)
-        estimated_strain = predicted_stress / 200000 * 100  # Rough estimate
-        st.metric(
-            "Est. Strain",
-            f"{estimated_strain:.3f}%",
-            help="Estimated strain percentage"
-        )
+        estimated_strain = predicted_stress / 200000 * 100
+        st.metric("Est. Strain", f"{estimated_strain:.3f}%")
     
     with col3:
-        st.metric(
-            "Forming Depth",
-            f"{depth_input:.1f} mm",
-            help="Target forming depth"
-        )
+        st.metric("Forming Depth", f"{depth_input:.1f} mm")
     
     with col4:
-        # Safety factor (assuming yield stress ~250 MPa for typical sheet metal)
         safety_factor = 250 / predicted_stress if predicted_stress > 0 else 0
         st.metric(
             "Safety Factor",
@@ -392,42 +416,21 @@ if generate:
         "📋 Specifications"
     ])
     
-    # ================= TAB 1: PATH VISUALIZATION =================
     with tab1:
         st.subheader(f"3D Tool Path: {selected_path.upper()}")
         
-        # Generate path geometry
         x, y, z = generate_path_geometry(selected_path, depth_input, num_points)
         
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            # 3D Path visualization
             fig = px.line_3d(
                 x=x, y=y, z=z,
                 labels={"x": "X (mm)", "y": "Y (mm)", "z": "Z (mm)"},
                 title=f"{selected_path.title()} Path - Stress: {predicted_stress:.2f} MPa"
             )
-            fig.update_traces(
-                line=dict(
-                    color=z,
-                    colorscale='RdYlGn_r',
-                    width=4,
-                    colorbar=dict(title="Depth (mm)")
-                )
-            )
-            fig.update_layout(
-                scene=dict(
-                    xaxis_title="X (mm)",
-                    yaxis_title="Y (mm)",
-                    zaxis_title="Z (mm)",
-                    aspectmode='cube',
-                    camera=dict(
-                        eye=dict(x=1.5, y=1.5, z=1.2)
-                    )
-                ),
-                height=600
-            )
+            fig.update_traces(line=dict(color=z, colorscale='RdYlGn_r', width=4))
+            fig.update_layout(scene=dict(aspectmode='cube'), height=600)
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
@@ -436,13 +439,6 @@ if generate:
             st.metric("Max Depth", f"{abs(z.min()):.2f} mm")
             st.metric("Path Type", selected_path.title())
             
-            st.markdown("#### Coordinates")
-            st.write(f"**Start:** ({x[0]:.1f}, {y[0]:.1f}, {z[0]:.1f})")
-            st.write(f"**End:** ({x[-1]:.1f}, {y[-1]:.1f}, {z[-1]:.1f})")
-            st.write(f"**X Range:** {x.min():.1f} to {x.max():.1f} mm")
-            st.write(f"**Y Range:** {y.min():.1f} to {y.max():.1f} mm")
-            
-            # Download path data
             path_df = pd.DataFrame({'X': x, 'Y': y, 'Z': z})
             csv = path_df.to_csv(index=False)
             st.download_button(
@@ -453,18 +449,15 @@ if generate:
                 use_container_width=True
             )
     
-    # ================= TAB 2: PATH COMPARISON =================
     with tab2:
         st.subheader("Stress Comparison Across All Path Types")
         
         if all_predictions is not None and show_comparison:
-            # Create comparison dataframe
             comp_df = pd.DataFrame([
                 {"Path Type": k, "Predicted Stress (MPa)": v}
                 for k, v in all_predictions.items()
             ]).sort_values("Predicted Stress (MPa)")
             
-            # Highlight best option
             comp_df['Status'] = comp_df['Path Type'].apply(
                 lambda x: '🏆 Best' if x == best_path else '✓ Valid'
             )
@@ -472,7 +465,6 @@ if generate:
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                # Bar chart
                 fig = px.bar(
                     comp_df,
                     x='Path Type',
@@ -486,25 +478,10 @@ if generate:
             
             with col2:
                 st.markdown("#### Ranking")
-                st.dataframe(
-                    comp_df[['Path Type', 'Predicted Stress (MPa)', 'Status']],
-                    hide_index=True,
-                    use_container_width=True
-                )
-                
-                # Download comparison
-                csv = comp_df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Comparison",
-                    csv,
-                    "path_comparison.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
+                st.dataframe(comp_df[['Path Type', 'Predicted Stress (MPa)', 'Status']], hide_index=True)
         else:
-            st.info("💡 Enable 'Show All Path Comparisons' in sidebar or select 'Auto' mode to see comparison.")
+            st.info("💡 Enable 'Show All Path Comparisons' or select 'Auto' mode.")
     
-    # ================= TAB 3: DETAILED ANALYSIS =================
     with tab3:
         st.subheader("Detailed Performance Analysis")
         
@@ -522,22 +499,11 @@ if generate:
                     f"{param_side_length} mm"
                 ]
             })
-            st.dataframe(params_df, hide_index=True, use_container_width=True)
-            
-            st.markdown("#### ML Model Features")
-            features = prepare_features(
-                selected_path, depth_input, param_radius, param_max_radius, param_side_length
-            )
-            features_df = pd.DataFrame({
-                "Feature": feature_cols,
-                "Value": features[0]
-            })
-            st.dataframe(features_df, hide_index=True, use_container_width=True)
+            st.dataframe(params_df, hide_index=True)
         
         with col2:
-            st.markdown("#### Stress Distribution Estimation")
+            st.markdown("#### Stress vs Depth Profile")
             
-            # Generate stress distribution along depth
             depth_points = np.linspace(0, depth_input, 20)
             stress_points = [
                 predict_stress(selected_path, d, param_radius, param_max_radius, param_side_length)
@@ -547,21 +513,11 @@ if generate:
             fig = px.line(
                 x=depth_points,
                 y=stress_points,
-                labels={"x": "Depth (mm)", "y": "Predicted Stress (MPa)"},
-                title="Stress vs Depth Profile"
+                labels={"x": "Depth (mm)", "y": "Predicted Stress (MPa)"}
             )
             fig.update_traces(line=dict(color='red', width=3))
             st.plotly_chart(fig, use_container_width=True)
-            
-            st.markdown("#### Material Recommendations")
-            if predicted_stress < 200:
-                st.success("✅ Suitable for aluminum alloys (6061-T6)")
-            elif predicted_stress < 300:
-                st.warning("⚠️ Consider steel alloys (mild steel)")
-            else:
-                st.error("❌ High stress - use high-strength steel")
     
-    # ================= TAB 4: SPECIFICATIONS =================
     with tab4:
         st.subheader("Technical Specifications")
         
@@ -571,51 +527,24 @@ if generate:
             st.markdown("#### Process Parameters")
             st.write(f"**Path Type:** {selected_path}")
             st.write(f"**Forming Depth:** {depth_input} mm")
-            st.write(f"**Shape Radius:** {param_radius} mm")
-            st.write(f"**Max Radius:** {param_max_radius} mm")
-            st.write(f"**Side Length:** {param_side_length} mm")
-            
-            st.markdown("#### Predicted Results")
-            st.write(f"**Maximum Stress:** {predicted_stress:.2f} MPa")
-            st.write(f"**Estimated Strain:** {estimated_strain:.3f}%")
-            st.write(f"**Safety Factor:** {safety_factor:.2f}")
+            st.write(f"**Predicted Stress:** {predicted_stress:.2f} MPa")
             
         with col2:
             st.markdown("#### ML Model Details")
             st.write(f"**Algorithm:** Ridge Regression")
-            st.write(f"**Feature Set:** Polynomial (degree 2)")
-            st.write(f"**Input Features:** {len(feature_cols)}")
             st.write(f"**Training Samples:** {model_data['training_samples']}")
-            st.write(f"**Model R²:** {model_data['r2']:.3f}")
-            st.write(f"**Model RMSE:** {model_data['rmse']:.2f} MPa")
-            
-            st.markdown("#### Available Path Types")
-            st.write(", ".join(path_types))
+            st.write(f"**R² Score:** {model_data['r2']:.3f}")
+            st.write(f"**RMSE:** {model_data['rmse']:.2f} MPa")
 
 else:
-    # Initial state - show instructions
     st.info("""
     ### 🚀 Getting Started
     
     1. **Select a shape** from the sidebar (or choose 'Auto' for ML recommendation)
     2. **Set the forming depth** using the slider
-    3. **Adjust advanced parameters** if needed (optional)
+    3. **Adjust advanced parameters** if needed
     4. **Click 'Generate & Predict'** to see results
-    
-    The ML model will predict stress, strain, and other performance metrics based on your inputs.
     """)
-    
-    # Show available path types
-    st.markdown("### 📐 Available Path Types")
-    
-    cols = st.columns(4)
-    for idx, path in enumerate(path_types):
-        with cols[idx % 4]:
-            st.button(f"◆ {path.title()}", use_container_width=True, disabled=True)
 
-# ================= FOOTER =================
 st.markdown("---")
-st.caption("""
-🔬 **Smart Incremental Forming with ML** | Powered by Ridge Regression | 
-Path Optimization & Stress Prediction System
-""")
+st.caption("🔬 Smart Incremental Forming with ML | Powered by Ridge Regression")
