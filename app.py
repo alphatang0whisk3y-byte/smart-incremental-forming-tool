@@ -1,28 +1,3 @@
-Attachment app.py added.Conversation opened. 2 messages. 1 message unread.
-
-Skip to content
-Using Gmail with screen readers
-1 of 615
-(no subject)
-Inbox
-
-Gokul Kn
-Attachments
-10:27 PM (18 minutes ago)
- 
-
-Shawn M.Mathew
-Attachments
-10:45 PM (0 minutes ago)
-to me
-
-
-
-On Fri, Feb 13, 2026 at 10:27 PM Gokul Kn <alphatang0whisk3y@gmail.com> wrote:
-
-
- 3 Attachments
-  •  Scanned by Gmail
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -644,5 +619,3 @@ st.caption("""
 🔬 **Smart Incremental Forming with ML** | Powered by Ridge Regression | 
 Path Optimization & Stress Prediction System
 """)
-enhanced_app.py
-Displaying enhanced_app.py.
