@@ -1,0 +1,9 @@
+€•I      }”(Œmodel”Œsklearn.linear_model._ridge”ŒRidge”“”)”}”(Œalpha”G@$      Œ
+fit_intercept”ˆŒcopy_X”ˆŒmax_iter”NŒtol”G?6âëC-Œsolver”Œauto”Œpositive”‰Œrandom_state”NŒn_features_in_”KŒcoef_”Œnumpy._core.multiarray”Œ_reconstruct”“”Œnumpy”Œ ndarray”“”K …”Cb”‡”R”(KK…”hŒdtype”“”Œf8”‰ˆ‡”R”(KŒ<”NNNJÿÿÿÿJÿÿÿÿK t”b‰C@Cœ.øŒ(@ø³ÿ£ˆ;Ì¿Ê öyMÀÑŠk
+ÎÂæ¿Q·ý‰/£<?2î÷¾èÛ¿r«T+SÐ?6+ÏÐ¤µ?”t”bŒ n_iter_”NŒ solver_”Œcholesky”Œ
+intercept_”hŒscalar”“”h!CZšcÙÖn@”†”R”Œ_sklearn_version”Œ1.8.0”ubŒ encoder”Œsklearn.preprocessing._label”ŒLabelEncoder”“”)”}”(Œclasses_”hhK …”h‡”R”(KK…”hŒO8”‰ˆ‡”R”(KŒ|”NNNJÿÿÿÿJÿÿÿÿK?t”b‰]”(Œcircular”Œ
+concentric”Œ ellipse”Œ figure8”Œ hexagon”Œ	lissajous”Œrose”Œspiral”Œ
+spiral_inward”Œsquare”Œstar”Œzigzag”et”bh/h0ubŒfeature_cols”]”(Œdepth”Œpath_encoded”Œparam_radius_filled”Œparam_max_radius_filled”Œparam_side_length_filled”Œ
+depth_squared”Œradius_squared”Œmax_radius_squared”eŒ
+path_types”]”(hBhChDhEhFhGhHhIhJhKhLhMeŒmae”G@&¨0ªkøŒrmse”h+h!Cœ­òÇV°/@”†”R”Œr2”G?à&ñ)ïQŒtraining_samples”MŒfeature_set_name”Œ
+Polynomial”u.
