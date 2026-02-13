@@ -1,405 +1,648 @@
+Attachment app.py added.Conversation opened. 2 messages. 1 message unread.
+
+Skip to content
+Using Gmail with screen readers
+1 of 615
+(no subject)
+Inbox
+
+Gokul Kn
+Attachments
+10:27 PM (18 minutes ago)
+ 
+
+Shawn M.Mathew
+Attachments
+10:45 PM (0 minutes ago)
+to me
+
+
+
+On Fri, Feb 13, 2026 at 10:27 PM Gokul Kn <alphatang0whisk3y@gmail.com> wrote:
+
+
+ 3 Attachments
+  •  Scanned by Gmail
 import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pickle
+from sklearn.preprocessing import LabelEncoder
 
 # ================= PAGE CONFIG =================
 st.set_page_config(
-    page_title="Smart Incremental Forming Tool",
-    layout="wide"
+    page_title="Smart Incremental Forming - ML Path Optimizer",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# ================= ML MODEL COEFFICIENTS =================
-# These are the coefficients from your trained polynomial regression model
-ML_COEFFICIENTS = np.array([
-    1.49527664, -0.00206813, 0.00487946, -0.00013187, 
-    2.14330703e-06, -2.44266703e-05, 1.67795159e-07
-])
+# ================= LOAD ML MODEL =================
+@st.cache_resource
+def load_ml_model():
+    """Load the trained ML model and components"""
+    try:
+        with open('best_combined_model.pkl', 'rb') as f:
+            model_data = pickle.load(f)
+        return model_data
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        return None
 
-def predict_thickness_ml(tool_diameter, step_size, depth):
+# Load model
+model_data = load_ml_model()
+
+if model_data is None:
+    st.error("⚠️ Failed to load ML model. Please ensure 'best_combined_model.pkl' is in the same directory.")
+    st.stop()
+
+# Extract model components
+ml_model = model_data['model']
+encoder = model_data['encoder']
+feature_cols = model_data['feature_cols']
+path_types = model_data['path_types']
+
+# ================= HELPER FUNCTIONS =================
+
+def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
     """
-    Predict thickness using the trained polynomial regression model
-    Features: [1, tool_diameter, step_size, depth, tool_diameter^2, 
-               tool_diameter*step_size, tool_diameter*depth]
+    Prepare features for ML prediction
+    Features: ['depth', 'path_encoded', 'param_radius_filled', 'param_max_radius_filled', 
+               'param_side_length_filled', 'depth_squared', 'radius_squared', 'max_radius_squared']
     """
-    # Manually create polynomial features (degree 2)
-    # Order: [bias, d, s, z, d^2, d*s, d*z]
-    features = np.array([
-        1.0,                        # bias
-        tool_diameter,              # d
-        step_size,                  # s
-        depth,                      # z
-        tool_diameter ** 2,         # d^2
-        tool_diameter * step_size,  # d*s
-        tool_diameter * depth       # d*z
-    ])
+    # Encode path type
+    path_encoded = encoder.transform([path_type])[0]
     
-    # Calculate prediction
-    thickness = np.dot(ML_COEFFICIENTS, features)
+    # Create features
+    features = {
+        'depth': depth,
+        'path_encoded': path_encoded,
+        'param_radius_filled': param_radius,
+        'param_max_radius_filled': param_max_radius,
+        'param_side_length_filled': param_side_length,
+        'depth_squared': depth ** 2,
+        'radius_squared': param_radius ** 2,
+        'max_radius_squared': param_max_radius ** 2
+    }
     
-    return thickness
+    # Convert to array in correct order
+    feature_array = np.array([[features[col] for col in feature_cols]])
+    return feature_array
+
+def predict_stress(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
+    """Predict stress for given parameters"""
+    features = prepare_features(path_type, depth, param_radius, param_max_radius, param_side_length)
+    stress_prediction = ml_model.predict(features)[0]
+    return stress_prediction
+
+def find_best_path(depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
+    """Find the best path type (lowest stress) for given depth"""
+    predictions = {}
+    
+    for path in path_types:
+        try:
+            stress = predict_stress(path, depth, param_radius, param_max_radius, param_side_length)
+            predictions[path] = stress
+        except Exception as e:
+            predictions[path] = None
+    
+    # Remove None values
+    valid_predictions = {k: v for k, v in predictions.items() if v is not None}
+    
+    if not valid_predictions:
+        return None, None, {}
+    
+    # Find minimum stress path
+    best_path = min(valid_predictions, key=valid_predictions.get)
+    best_stress = valid_predictions[best_path]
+    
+    return best_path, best_stress, valid_predictions
+
+def generate_path_geometry(path_type, depth, num_points=300):
+    """Generate 3D coordinates for different path types"""
+    t = np.linspace(0, 2*np.pi, num_points)
+    
+    if path_type == 'circular':
+        radius = 50
+        x = radius * np.cos(t)
+        y = radius * np.sin(t)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'spiral':
+        radius = 50 * (1 - t/(2*np.pi) * 0.5)
+        x = radius * np.cos(t * 3)
+        y = radius * np.sin(t * 3)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'spiral_inward':
+        radius = 50 * (t/(2*np.pi))
+        x = radius * np.cos(t * 5)
+        y = radius * np.sin(t * 5)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'square':
+        # Square path
+        side = 40
+        x = np.concatenate([
+            np.linspace(-side, side, num_points//4),
+            np.full(num_points//4, side),
+            np.linspace(side, -side, num_points//4),
+            np.full(num_points//4, -side)
+        ])
+        y = np.concatenate([
+            np.full(num_points//4, -side),
+            np.linspace(-side, side, num_points//4),
+            np.full(num_points//4, side),
+            np.linspace(side, -side, num_points//4)
+        ])
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'hexagon':
+        # Hexagon path
+        angles = np.linspace(0, 2*np.pi, 7)
+        radius = 40
+        hex_x = radius * np.cos(angles)
+        hex_y = radius * np.sin(angles)
+        x = np.interp(np.linspace(0, 6, num_points), np.arange(7), hex_x)
+        y = np.interp(np.linspace(0, 6, num_points), np.arange(7), hex_y)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'star':
+        # Star pattern
+        outer_r, inner_r = 50, 25
+        points = 5
+        angles = np.linspace(0, 2*np.pi, points*2+1)
+        radii = np.array([outer_r if i % 2 == 0 else inner_r for i in range(len(angles))])
+        star_x = radii * np.cos(angles)
+        star_y = radii * np.sin(angles)
+        x = np.interp(np.linspace(0, points*2, num_points), np.arange(len(star_x)), star_x)
+        y = np.interp(np.linspace(0, points*2, num_points), np.arange(len(star_y)), star_y)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'rose':
+        # Rose curve
+        k = 3  # petals
+        radius = 50 * np.cos(k * t)
+        x = radius * np.cos(t)
+        y = radius * np.sin(t)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'ellipse':
+        # Ellipse
+        a, b = 50, 30  # major, minor axis
+        x = a * np.cos(t)
+        y = b * np.sin(t)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'zigzag':
+        # Zigzag pattern
+        x = 40 * np.sin(t * 5)
+        y = np.linspace(-40, 40, num_points)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'figure8':
+        # Figure-8 / Lemniscate
+        scale = 30
+        x = scale * np.sin(t)
+        y = scale * np.sin(t) * np.cos(t)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'concentric':
+        # Concentric circles
+        num_circles = 3
+        radius = 50 * (1 - (t / (2*np.pi)) % (1/num_circles) * num_circles)
+        x = radius * np.cos(t * num_circles)
+        y = radius * np.sin(t * num_circles)
+        z = -np.linspace(0, depth, num_points)
+        
+    elif path_type == 'lissajous':
+        # Lissajous curve
+        A, B = 40, 30
+        a, b = 3, 4
+        x = A * np.sin(a * t)
+        y = B * np.sin(b * t)
+        z = -np.linspace(0, depth, num_points)
+        
+    else:
+        # Default to circular
+        radius = 50
+        x = radius * np.cos(t)
+        y = radius * np.sin(t)
+        z = -np.linspace(0, depth, num_points)
+    
+    return x, y, z
+
+# ================= CUSTOM CSS =================
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.2rem;
+        color: #666;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+    }
+    .recommendation-box {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        color: white;
+        font-size: 1.3rem;
+        font-weight: bold;
+        text-align: center;
+        margin: 1rem 0;
+    }
+    .info-box {
+        background-color: #e3f2fd;
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 5px solid #2196f3;
+        margin: 1rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ================= TITLE =================
-st.title("🔧 Smart Incremental Forming Tool")
-st.markdown(
-    "### ML-Powered Tool-Path Generation & Thickness Prediction"
-)
-st.markdown("Interactive interface for tool-path generation, ML prediction, and FEM comparison")
+st.markdown('<p class="main-header">🔧 Smart Incremental Forming - ML Path Optimizer</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">AI-Powered Tool-Path Selection & Stress Prediction System</p>', unsafe_allow_html=True)
 st.markdown("---")
 
 # ================= SIDEBAR =================
-st.sidebar.header("🔧 Tool Parameters")
+st.sidebar.header("🎯 Input Parameters")
 
-tool_diameter = st.sidebar.slider(
-    "Tool Diameter (mm)", 5.0, 20.0, 10.0, 0.5
+# Shape selection
+st.sidebar.subheader("📐 Shape Selection")
+shape_input = st.sidebar.selectbox(
+    "Select Shape Type",
+    options=['Auto (ML Recommends)'] + path_types,
+    help="Choose 'Auto' to let ML find the best path type"
 )
 
-tool_radius = st.sidebar.slider(
-    "Tool Tip Radius (mm)", 1.0, 10.0, 5.0, 0.5
+# Depth input
+depth_input = st.sidebar.slider(
+    "Forming Depth (mm)",
+    min_value=1.0,
+    max_value=10.0,
+    value=4.0,
+    step=0.5,
+    help="Target forming depth"
 )
 
-st.sidebar.header("⚙️ Process Parameters")
+# Advanced parameters
+st.sidebar.subheader("⚙️ Advanced Parameters")
+with st.sidebar.expander("Shape Parameters"):
+    param_radius = st.slider("Radius (mm)", 5.0, 20.0, 10.0, 0.5)
+    param_max_radius = st.slider("Max Radius (mm)", 10.0, 25.0, 15.0, 0.5)
+    param_side_length = st.slider("Side Length (mm)", 8.0, 20.0, 12.0, 0.5)
 
-step_size = st.sidebar.slider(
-    "Step Size Δz (mm)", 0.1, 1.0, 0.5, 0.05
-)
+# Display options
+st.sidebar.subheader("📊 Visualization")
+num_points = st.sidebar.slider("Path Resolution", 100, 500, 300, 50)
+show_comparison = st.sidebar.checkbox("Show All Path Comparisons", value=True)
 
-forming_depth = st.sidebar.slider(
-    "Target Forming Depth (mm)", 5.0, 50.0, 20.0, 1.0
-)
+# Generate button
+generate = st.sidebar.button("🚀 Generate & Predict", type="primary", use_container_width=True)
 
+# Model info in sidebar
 st.sidebar.markdown("---")
-st.sidebar.header("📊 Display Options")
+st.sidebar.subheader("🤖 Model Information")
+st.sidebar.info(f"""
+**Model Type:** Ridge Regression (Polynomial)  
+**Features:** {len(feature_cols)}  
+**Training Samples:** {model_data['training_samples']}  
+**R² Score:** {model_data['r2']:.3f}  
+**RMSE:** {model_data['rmse']:.2f} MPa
+""")
 
-num_points = st.sidebar.slider(
-    "Tool Path Resolution", 100, 500, 300, 50
-)
+# ================= MAIN CONTENT =================
 
-generate = st.sidebar.button("▶️ Generate Results", type="primary")
-
-# Display current ML prediction in sidebar
-st.sidebar.markdown("---")
-st.sidebar.subheader("🤖 ML Prediction")
 if generate:
-    predicted_thickness = predict_thickness_ml(tool_diameter, step_size, forming_depth)
-    st.sidebar.metric(
-        "Predicted Thickness", 
-        f"{predicted_thickness:.4f} mm",
-        delta=f"{predicted_thickness - 1.5:.4f} mm from initial"
-    )
-    st.sidebar.caption("Based on polynomial regression model")
-
-# ================= DATA GENERATION =================
-# Generate spiral tool path
-t = np.linspace(0, 2*np.pi, num_points)
-radius = 50 * (1 - t/(2*np.pi) * 0.3)  # Gradually decreasing radius
-x = radius * np.cos(t)
-y = radius * np.sin(t)
-z = -np.linspace(0, forming_depth, len(t))
-
-# ML-based prediction for each point along the path
-pred_thickness_array = []
-for i in range(len(t)):
-    depth_at_point = np.abs(z[i])
-    thickness = predict_thickness_ml(tool_diameter, step_size, depth_at_point)
-    pred_thickness_array.append(thickness)
-
-pred_thickness_array = np.array(pred_thickness_array)
-
-# Create DataFrame for predictions
-pred_df = pd.DataFrame({
-    "x": x,
-    "y": y,
-    "z": z,
-    "thickness": pred_thickness_array
-})
-
-# ================= TABS =================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["🔧 Tool Path", "🔮 ML Prediction", "🧪 FEM Result", "📊 Comparison", "📈 Model Info"]
-)
-
-# ================= TAB 1: TOOL PATH =================
-with tab1:
-    st.subheader("3D Tool Path Visualization")
-    st.markdown(
-        "Generated tool path based on the selected process parameters."
-    )
-    if generate:
+    # Determine which path to use
+    if shape_input == 'Auto (ML Recommends)':
+        # Find best path automatically
+        with st.spinner("🔍 Analyzing all path types to find optimal solution..."):
+            best_path, best_stress, all_predictions = find_best_path(
+                depth_input, param_radius, param_max_radius, param_side_length
+            )
+        
+        if best_path is None:
+            st.error("❌ Failed to generate predictions. Please check input parameters.")
+            st.stop()
+        
+        # Display recommendation
+        st.markdown(f"""
+        <div class="recommendation-box">
+            🎯 RECOMMENDED PATH TYPE: <strong>{best_path.upper()}</strong><br>
+            Predicted Stress: {best_stress:.2f} MPa
+        </div>
+        """, unsafe_allow_html=True)
+        
+        selected_path = best_path
+        predicted_stress = best_stress
+        
+    else:
+        # Use user-selected path
+        selected_path = shape_input
+        predicted_stress = predict_stress(
+            selected_path, depth_input, param_radius, param_max_radius, param_side_length
+        )
+        all_predictions = None
+        
+        st.markdown(f"""
+        <div class="info-box">
+            <strong>Selected Path:</strong> {selected_path.upper()}<br>
+            <strong>Predicted Stress:</strong> {predicted_stress:.2f} MPa
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # ================= KEY METRICS =================
+    st.subheader("📊 Predicted Performance Metrics")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "Max Stress",
+            f"{predicted_stress:.2f} MPa",
+            help="Predicted maximum stress"
+        )
+    
+    with col2:
+        # Estimate strain (simplified relationship)
+        estimated_strain = predicted_stress / 200000 * 100  # Rough estimate
+        st.metric(
+            "Est. Strain",
+            f"{estimated_strain:.3f}%",
+            help="Estimated strain percentage"
+        )
+    
+    with col3:
+        st.metric(
+            "Forming Depth",
+            f"{depth_input:.1f} mm",
+            help="Target forming depth"
+        )
+    
+    with col4:
+        # Safety factor (assuming yield stress ~250 MPa for typical sheet metal)
+        safety_factor = 250 / predicted_stress if predicted_stress > 0 else 0
+        st.metric(
+            "Safety Factor",
+            f"{safety_factor:.2f}",
+            delta="Safe" if safety_factor > 1.5 else "Check",
+            delta_color="normal" if safety_factor > 1.5 else "inverse"
+        )
+    
+    st.markdown("---")
+    
+    # ================= TABS =================
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🎯 3D Path Visualization",
+        "📈 Path Comparison",
+        "🔬 Detailed Analysis",
+        "📋 Specifications"
+    ])
+    
+    # ================= TAB 1: PATH VISUALIZATION =================
+    with tab1:
+        st.subheader(f"3D Tool Path: {selected_path.upper()}")
+        
+        # Generate path geometry
+        x, y, z = generate_path_geometry(selected_path, depth_input, num_points)
+        
         col1, col2 = st.columns([2, 1])
         
         with col1:
+            # 3D Path visualization
             fig = px.line_3d(
                 x=x, y=y, z=z,
                 labels={"x": "X (mm)", "y": "Y (mm)", "z": "Z (mm)"},
-                title="Incremental Forming Tool Path"
+                title=f"{selected_path.title()} Path - Stress: {predicted_stress:.2f} MPa"
             )
-            fig.update_traces(line=dict(color='royalblue', width=3))
+            fig.update_traces(
+                line=dict(
+                    color=z,
+                    colorscale='RdYlGn_r',
+                    width=4,
+                    colorbar=dict(title="Depth (mm)")
+                )
+            )
             fig.update_layout(
                 scene=dict(
                     xaxis_title="X (mm)",
                     yaxis_title="Y (mm)",
                     zaxis_title="Z (mm)",
-                    aspectmode='cube'
+                    aspectmode='cube',
+                    camera=dict(
+                        eye=dict(x=1.5, y=1.5, z=1.2)
+                    )
                 ),
                 height=600
             )
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            st.metric("Total Path Length", f"{len(t)} points")
-            st.metric("Max Depth", f"{forming_depth:.2f} mm")
-            st.metric("Step Size", f"{step_size:.2f} mm")
-            st.metric("Tool Diameter", f"{tool_diameter:.2f} mm")
-            
-            # Show path statistics
             st.markdown("#### Path Statistics")
-            st.write(f"- Start: ({x[0]:.2f}, {y[0]:.2f}, {z[0]:.2f})")
-            st.write(f"- End: ({x[-1]:.2f}, {y[-1]:.2f}, {z[-1]:.2f})")
-    else:
-        st.info("⚠️ Set parameters and click **Generate Results** to visualize the tool path.")
-
-# ================= TAB 2: ML PREDICTED RESULT =================
-with tab2:
-    st.subheader("ML-Predicted Thickness Distribution")
-    st.markdown(
-        "Thickness distribution predicted using trained polynomial regression model."
-    )
-    if generate:
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            # 2D scatter plot
-            fig = px.scatter(
-                pred_df,
-                x="x", y="y",
-                color="thickness",
-                labels={"thickness": "Thickness (mm)"},
-                title="Predicted Thickness Map",
-                color_continuous_scale="RdYlGn"
-            )
-            fig.update_traces(marker=dict(size=8))
-            fig.update_layout(height=600)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.metric("Mean Thickness", f"{pred_df['thickness'].mean():.4f} mm")
-            st.metric("Min Thickness", f"{pred_df['thickness'].min():.4f} mm")
-            st.metric("Max Thickness", f"{pred_df['thickness'].max():.4f} mm")
-            st.metric("Std Deviation", f"{pred_df['thickness'].std():.4f} mm")
+            st.metric("Total Points", len(x))
+            st.metric("Max Depth", f"{abs(z.min()):.2f} mm")
+            st.metric("Path Type", selected_path.title())
             
-            # Thickness histogram
-            st.markdown("#### Thickness Distribution")
-            fig_hist = px.histogram(
-                pred_df, 
-                x="thickness",
-                nbins=30,
-                labels={"thickness": "Thickness (mm)"}
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.markdown("#### Coordinates")
+            st.write(f"**Start:** ({x[0]:.1f}, {y[0]:.1f}, {z[0]:.1f})")
+            st.write(f"**End:** ({x[-1]:.1f}, {y[-1]:.1f}, {z[-1]:.1f})")
+            st.write(f"**X Range:** {x.min():.1f} to {x.max():.1f} mm")
+            st.write(f"**Y Range:** {y.min():.1f} to {y.max():.1f} mm")
             
-    else:
-        st.info("⚠️ ML prediction will appear after generation.")
-
-# ================= TAB 3: FEM RESULT =================
-with tab3:
-    st.subheader("FEM Simulation Result")
-    st.markdown(
-        "Upload FEM simulation results in CSV format for visualization and comparison."
-    )
+            # Download path data
+            path_df = pd.DataFrame({'X': x, 'Y': y, 'Z': z})
+            csv = path_df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Path Data",
+                csv,
+                f"{selected_path}_path.csv",
+                "text/csv",
+                use_container_width=True
+            )
     
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        fem_file = st.file_uploader(
-            "Upload FEM CSV file (columns: x, y, thickness)",
-            type=["csv"]
-        )
+    # ================= TAB 2: PATH COMPARISON =================
+    with tab2:
+        st.subheader("Stress Comparison Across All Path Types")
         
-        if fem_file is not None:
-            fem_df = pd.read_csv(fem_file)
+        if all_predictions is not None and show_comparison:
+            # Create comparison dataframe
+            comp_df = pd.DataFrame([
+                {"Path Type": k, "Predicted Stress (MPa)": v}
+                for k, v in all_predictions.items()
+            ]).sort_values("Predicted Stress (MPa)")
             
-            # Display the data
-            st.markdown("##### Uploaded FEM Data Preview")
-            st.dataframe(fem_df.head(10), use_container_width=True)
-            
-            # Visualization
-            fig = px.scatter(
-                fem_df,
-                x="x", y="y",
-                color="thickness",
-                labels={"thickness": "Thickness (mm)"},
-                title="FEM Thickness Distribution",
-                color_continuous_scale="RdYlGn"
+            # Highlight best option
+            comp_df['Status'] = comp_df['Path Type'].apply(
+                lambda x: '🏆 Best' if x == best_path else '✓ Valid'
             )
-            fig.update_traces(marker=dict(size=8))
-            fig.update_layout(height=600)
-            st.plotly_chart(fig, use_container_width=True)
             
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Bar chart
+                fig = px.bar(
+                    comp_df,
+                    x='Path Type',
+                    y='Predicted Stress (MPa)',
+                    title='Stress Prediction by Path Type',
+                    color='Predicted Stress (MPa)',
+                    color_continuous_scale='RdYlGn_r'
+                )
+                fig.update_layout(height=500)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("#### Ranking")
+                st.dataframe(
+                    comp_df[['Path Type', 'Predicted Stress (MPa)', 'Status']],
+                    hide_index=True,
+                    use_container_width=True
+                )
+                
+                # Download comparison
+                csv = comp_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Comparison",
+                    csv,
+                    "path_comparison.csv",
+                    "text/csv",
+                    use_container_width=True
+                )
         else:
-            st.info("⚠️ Awaiting FEM CSV upload.")
+            st.info("💡 Enable 'Show All Path Comparisons' in sidebar or select 'Auto' mode to see comparison.")
     
-    with col2:
-        if fem_file is not None:
-            st.success("✅ FEM data loaded successfully.")
-            st.metric("Data Points", len(fem_df))
-            st.metric("Mean Thickness", f"{fem_df['thickness'].mean():.4f} mm")
-            st.metric("Min Thickness", f"{fem_df['thickness'].min():.4f} mm")
-            st.metric("Max Thickness", f"{fem_df['thickness'].max():.4f} mm")
-            
-            # Sample FEM data template
-            st.markdown("---")
-            st.markdown("##### Download Sample Template")
-            sample_df = pd.DataFrame({
-                'x': [10, 20, 30],
-                'y': [15, 25, 35],
-                'thickness': [1.48, 1.46, 1.44]
-            })
-            st.download_button(
-                "📥 Download CSV Template",
-                sample_df.to_csv(index=False),
-                "fem_template.csv",
-                "text/csv"
-            )
-
-# ================= TAB 4: COMPARISON =================
-with tab4:
-    st.subheader("ML Prediction vs FEM Comparison")
-    st.markdown(
-        "Quantitative comparison between ML predictions and FEM simulations."
-    )
-    if generate and fem_file is not None:
-        col1, col2 = st.columns([2, 1])
+    # ================= TAB 3: DETAILED ANALYSIS =================
+    with tab3:
+        st.subheader("Detailed Performance Analysis")
+        
+        col1, col2 = st.columns(2)
         
         with col1:
-            # Match dimensions
-            min_len = min(len(pred_df), len(fem_df))
-            error = pred_df["thickness"][:min_len] - fem_df["thickness"][:min_len]
-            comp_df = pd.DataFrame({
-                "Index": np.arange(min_len),
-                "ML Prediction": pred_df["thickness"][:min_len].values,
-                "FEM Result": fem_df["thickness"][:min_len].values,
-                "Error": error
+            st.markdown("#### Input Parameters")
+            params_df = pd.DataFrame({
+                "Parameter": ["Path Type", "Depth", "Radius", "Max Radius", "Side Length"],
+                "Value": [
+                    selected_path,
+                    f"{depth_input} mm",
+                    f"{param_radius} mm",
+                    f"{param_max_radius} mm",
+                    f"{param_side_length} mm"
+                ]
             })
+            st.dataframe(params_df, hide_index=True, use_container_width=True)
             
-            # Line plot comparison
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=comp_df["Index"], 
-                y=comp_df["ML Prediction"],
-                mode='lines',
-                name='ML Prediction',
-                line=dict(color='blue', width=2)
-            ))
-            fig.add_trace(go.Scatter(
-                x=comp_df["Index"], 
-                y=comp_df["FEM Result"],
-                mode='lines',
-                name='FEM Result',
-                line=dict(color='red', width=2)
-            ))
-            fig.update_layout(
-                title="Thickness Comparison: ML vs FEM",
-                xaxis_title="Point Index",
-                yaxis_title="Thickness (mm)",
-                height=400
+            st.markdown("#### ML Model Features")
+            features = prepare_features(
+                selected_path, depth_input, param_radius, param_max_radius, param_side_length
             )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Error plot
-            fig_error = px.line(
-                comp_df,
-                x="Index",
-                y="Error",
-                title="Prediction Error (ML - FEM)",
-                labels={"Error": "Error (mm)"}
-            )
-            fig_error.add_hline(y=0, line_dash="dash", line_color="gray")
-            fig_error.update_layout(height=400)
-            st.plotly_chart(fig_error, use_container_width=True)
+            features_df = pd.DataFrame({
+                "Feature": feature_cols,
+                "Value": features[0]
+            })
+            st.dataframe(features_df, hide_index=True, use_container_width=True)
         
         with col2:
-            # Error metrics
-            mae = np.mean(np.abs(error))
-            rmse = np.sqrt(np.mean(error**2))
-            max_error = np.max(np.abs(error))
+            st.markdown("#### Stress Distribution Estimation")
             
-            st.metric("Mean Absolute Error", f"{mae:.4f} mm")
-            st.metric("Root Mean Squared Error", f"{rmse:.4f} mm")
-            st.metric("Max Error", f"{max_error:.4f} mm")
-            st.metric("Data Points Compared", min_len)
+            # Generate stress distribution along depth
+            depth_points = np.linspace(0, depth_input, 20)
+            stress_points = [
+                predict_stress(selected_path, d, param_radius, param_max_radius, param_side_length)
+                for d in depth_points
+            ]
             
-            # Accuracy percentage
-            accuracy = (1 - mae/np.mean(fem_df["thickness"][:min_len])) * 100
-            st.metric("Model Accuracy", f"{accuracy:.2f}%")
-            
-            # Download comparison data
-            st.markdown("---")
-            st.download_button(
-                "📥 Download Comparison CSV",
-                comp_df.to_csv(index=False),
-                "comparison_results.csv",
-                "text/csv"
+            fig = px.line(
+                x=depth_points,
+                y=stress_points,
+                labels={"x": "Depth (mm)", "y": "Predicted Stress (MPa)"},
+                title="Stress vs Depth Profile"
             )
-    elif not generate:
-        st.info("⚠️ Generate results first.")
-    elif fem_file is None:
-        st.info("⚠️ Upload FEM data to enable comparison.")
-    else:
-        st.info("⚠️ Generate results and upload FEM data to compare.")
+            fig.update_traces(line=dict(color='red', width=3))
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown("#### Material Recommendations")
+            if predicted_stress < 200:
+                st.success("✅ Suitable for aluminum alloys (6061-T6)")
+            elif predicted_stress < 300:
+                st.warning("⚠️ Consider steel alloys (mild steel)")
+            else:
+                st.error("❌ High stress - use high-strength steel")
+    
+    # ================= TAB 4: SPECIFICATIONS =================
+    with tab4:
+        st.subheader("Technical Specifications")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Process Parameters")
+            st.write(f"**Path Type:** {selected_path}")
+            st.write(f"**Forming Depth:** {depth_input} mm")
+            st.write(f"**Shape Radius:** {param_radius} mm")
+            st.write(f"**Max Radius:** {param_max_radius} mm")
+            st.write(f"**Side Length:** {param_side_length} mm")
+            
+            st.markdown("#### Predicted Results")
+            st.write(f"**Maximum Stress:** {predicted_stress:.2f} MPa")
+            st.write(f"**Estimated Strain:** {estimated_strain:.3f}%")
+            st.write(f"**Safety Factor:** {safety_factor:.2f}")
+            
+        with col2:
+            st.markdown("#### ML Model Details")
+            st.write(f"**Algorithm:** Ridge Regression")
+            st.write(f"**Feature Set:** Polynomial (degree 2)")
+            st.write(f"**Input Features:** {len(feature_cols)}")
+            st.write(f"**Training Samples:** {model_data['training_samples']}")
+            st.write(f"**Model R²:** {model_data['r2']:.3f}")
+            st.write(f"**Model RMSE:** {model_data['rmse']:.2f} MPa")
+            
+            st.markdown("#### Available Path Types")
+            st.write(", ".join(path_types))
 
-# ================= TAB 5: MODEL INFO =================
-with tab5:
-    st.subheader("🤖 ML Model Information")
+else:
+    # Initial state - show instructions
+    st.info("""
+    ### 🚀 Getting Started
     
-    col1, col2 = st.columns(2)
+    1. **Select a shape** from the sidebar (or choose 'Auto' for ML recommendation)
+    2. **Set the forming depth** using the slider
+    3. **Adjust advanced parameters** if needed (optional)
+    4. **Click 'Generate & Predict'** to see results
     
-    with col1:
-        st.markdown("#### Model Architecture")
-        st.write("**Type:** Polynomial Regression (Degree 2)")
-        st.write("**Features:** Tool Diameter, Step Size, Forming Depth")
-        st.write("**Output:** Sheet Thickness (mm)")
-        
-        st.markdown("#### Model Coefficients")
-        coef_df = pd.DataFrame({
-            "Feature": [
-                "Bias",
-                "Tool Diameter", 
-                "Step Size", 
-                "Depth",
-                "Tool Diameter²",
-                "Tool Diameter × Step Size",
-                "Tool Diameter × Depth"
-            ],
-            "Coefficient": ML_COEFFICIENTS
-        })
-        st.dataframe(coef_df, use_container_width=True)
+    The ML model will predict stress, strain, and other performance metrics based on your inputs.
+    """)
     
-    with col2:
-        st.markdown("#### Model Equation")
-        st.latex(r'''
-        t = \beta_0 + \beta_1 d + \beta_2 s + \beta_3 z 
-        + \beta_4 d^2 + \beta_5 ds + \beta_6 dz
-        ''')
-        st.caption("Where: t = thickness, d = diameter, s = step size, z = depth")
-        
-        st.markdown("#### Feature Ranges")
-        st.write("- **Tool Diameter:** 5.0 - 20.0 mm")
-        st.write("- **Step Size:** 0.1 - 1.0 mm")
-        st.write("- **Forming Depth:** 5.0 - 50.0 mm")
-        
-        st.markdown("#### Model Performance")
-        st.info("""
-        This polynomial regression model was trained on experimental data 
-        to predict sheet thickness based on incremental forming parameters.
-        Use the Comparison tab to validate predictions against FEM results.
-        """)
+    # Show available path types
+    st.markdown("### 📐 Available Path Types")
+    
+    cols = st.columns(4)
+    for idx, path in enumerate(path_types):
+        with cols[idx % 4]:
+            st.button(f"◆ {path.title()}", use_container_width=True, disabled=True)
 
 # ================= FOOTER =================
 st.markdown("---")
-st.caption(
-    "🔬 Smart Incremental Forming Tool with ML Integration | "
-    "Powered by Polynomial Regression | "
-    "Ready for Streamlit Cloud Deployment"
-)
+st.caption("""
+🔬 **Smart Incremental Forming with ML** | Powered by Ridge Regression | 
+Path Optimization & Stress Prediction System
+""")
+enhanced_app.py
+Displaying enhanced_app.py.
