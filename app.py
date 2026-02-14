@@ -496,64 +496,64 @@ if generate:
     ])
     
     with tab1:
-    st.subheader(f"ML‑Driven Incremental Tool Path ({selected_path.upper()})")
-
-    step_size = depth_input / 10  # realistic Δz (can be slider later)
-
-    x, y, z, stress = generate_ml_driven_toolpath(
-        selected_path,
-        depth_input,
-        step_size,
-        param_radius,
-        param_max_radius,
-        param_side_length,
-        points_per_layer=num_points // 5
-    )
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Scatter3d(
-            x=x,
-            y=y,
-            z=z,
-            mode="lines",
-            line=dict(
-                width=4,
-                color=stress,
-                colorscale="RdYlGn_r",
-                colorbar=dict(title="Predicted Stress (MPa)")
+        st.subheader(f"ML‑Driven Incremental Tool Path ({selected_path.upper()})")
+    
+        step_size = depth_input / 10  # realistic Δz (can be slider later)
+    
+        x, y, z, stress = generate_ml_driven_toolpath(
+            selected_path,
+            depth_input,
+            step_size,
+            param_radius,
+            param_max_radius,
+            param_side_length,
+            points_per_layer=num_points // 5
+        )
+    
+        fig = go.Figure()
+    
+        fig.add_trace(
+            go.Scatter3d(
+                x=x,
+                y=y,
+                z=z,
+                mode="lines",
+                line=dict(
+                    width=4,
+                    color=stress,
+                    colorscale="RdYlGn_r",
+                    colorbar=dict(title="Predicted Stress (MPa)")
+                )
             )
         )
-    )
-
-    fig.update_layout(
-        scene=dict(
-            xaxis_title="X (mm)",
-            yaxis_title="Y (mm)",
-            zaxis_title="Z (mm)",
-            aspectmode="cube"
-        ),
-        height=650
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Export ML-driven toolpath
-    path_df = pd.DataFrame({
-        "X_mm": x,
-        "Y_mm": y,
-        "Z_mm": z,
-        "Predicted_Stress_MPa": stress
-    })
-
-    st.download_button(
-        "📥 Download ML‑Driven Toolpath (CSV)",
-        path_df.to_csv(index=False),
-        file_name="ml_driven_toolpath.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
+    
+        fig.update_layout(
+            scene=dict(
+                xaxis_title="X (mm)",
+                yaxis_title="Y (mm)",
+                zaxis_title="Z (mm)",
+                aspectmode="cube"
+            ),
+            height=650
+        )
+    
+        st.plotly_chart(fig, use_container_width=True)
+    
+        # Export ML-driven toolpath
+        path_df = pd.DataFrame({
+            "X_mm": x,
+            "Y_mm": y,
+            "Z_mm": z,
+            "Predicted_Stress_MPa": stress
+        })
+    
+        st.download_button(
+            "📥 Download ML‑Driven Toolpath (CSV)",
+            path_df.to_csv(index=False),
+            file_name="ml_driven_toolpath.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 
         
         with col1:
