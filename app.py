@@ -971,7 +971,7 @@ else:
     You'll see the complete multi-layer tool movement showing the actual forming operation.
     """)
     
-    st.markdown("### 📐 Available Geometries")
+    st.markdown("### Available Geometries")
     cols = st.columns(3)
     for idx, (geom, info) in enumerate(GEOMETRY_PATH_RECOMMENDATIONS.items()):
         with cols[idx % 3]:
@@ -979,4 +979,4 @@ else:
             st.caption(info['description'])
 
 st.markdown("---")
-st.caption("🔬 Smart Incremental Forming with ML | Multi-Layer Path Generation")
+st.caption("Smart Incremental Forming with ML | Multi-Layer Path Generation")
