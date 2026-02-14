@@ -895,6 +895,8 @@ Generated: {pd.Timestamp.now()}
                 Upload your dynain.txt file in the sidebar to compare 
                 ML predictions with actual FEM simulation results.
                 """)
+
+else:
         
         col1, col2 = st.columns(2)
         
