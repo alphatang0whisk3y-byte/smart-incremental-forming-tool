@@ -889,12 +889,10 @@ Generated: {pd.Timestamp.now()}
             
             if fem_data is None:
                 st.markdown("---")
-                st.info("""
-                💡 **Upload FEM Results**
-                
-                Upload your dynain.txt file in the sidebar to compare 
-                ML predictions with actual FEM simulation results.
-                """)
+                st.info(
+                    "**Upload FEM Results:** Upload your dynain.txt file in the sidebar "
+                    "to compare ML predictions with actual FEM simulation results."
+                )
 
 else:
     # Initial state - show instructions when generate button hasn't been clicked
