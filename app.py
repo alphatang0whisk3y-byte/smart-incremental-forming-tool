@@ -112,6 +112,85 @@ feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
 
 # ================= HELPER FUNCTIONS =================
+def generate_ml_driven_toolpath(
+    path_type,
+    max_depth,
+    step_size,
+    param_radius,
+    param_max_radius,
+    param_side_length,
+    points_per_layer=200
+):
+    """
+    Generates an ML-driven incremental forming tool path.
+    Tool moves layer-by-layer and adapts geometry using ML stress prediction.
+    """
+
+    all_x, all_y, all_z, all_stress = [], [], [], []
+
+    depth_levels = np.arange(0, max_depth + step_size, step_size)
+
+    base_radius = 50
+    reference_stress = 300  # MPa (normalization reference)
+
+    for d in depth_levels:
+        stress = predict_stress(
+            path_type,
+            d,
+            param_radius,
+            param_max_radius,
+            param_side_length
+        )
+
+        # Stress-based radius adaptation (physics-inspired)
+        stress_factor = np.clip(1 - (stress / reference_stress), 0.6, 1.05)
+        effective_radius = base_radius * stress_factor
+
+        t = np.linspace(0, 2 * np.pi, points_per_layer)
+
+        if path_type in ["circular", "concentric"]:
+            x = effective_radius * np.cos(t)
+            y = effective_radius * np.sin(t)
+
+        elif path_type == "spiral":
+            r = effective_radius * (1 - t / (2 * np.pi))
+            x = r * np.cos(t * 2)
+            y = r * np.sin(t * 2)
+
+        elif path_type == "square":
+            side = effective_radius
+            pts = points_per_layer // 4
+            x = np.concatenate([
+                np.linspace(-side, side, pts),
+                np.full(pts, side),
+                np.linspace(side, -side, pts),
+                np.full(pts, -side)
+            ])
+            y = np.concatenate([
+                np.full(pts, -side),
+                np.linspace(-side, side, pts),
+                np.full(pts, side),
+                np.linspace(side, -side, pts)
+            ])
+
+        else:
+            # fallback
+            x = effective_radius * np.cos(t)
+            y = effective_radius * np.sin(t)
+
+        z = np.full_like(x, -d)
+
+        all_x.extend(x)
+        all_y.extend(y)
+        all_z.extend(z)
+        all_stress.extend([stress] * len(x))
+
+    return (
+        np.array(all_x),
+        np.array(all_y),
+        np.array(all_z),
+        np.array(all_stress)
+    )
 
 def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
     """Prepare features for ML prediction"""
@@ -417,11 +496,65 @@ if generate:
     ])
     
     with tab1:
-        st.subheader(f"3D Tool Path: {selected_path.upper()}")
-        
-        x, y, z = generate_path_geometry(selected_path, depth_input, num_points)
-        
-        col1, col2 = st.columns([2, 1])
+    st.subheader(f"ML‑Driven Incremental Tool Path ({selected_path.upper()})")
+
+    step_size = depth_input / 10  # realistic Δz (can be slider later)
+
+    x, y, z, stress = generate_ml_driven_toolpath(
+        selected_path,
+        depth_input,
+        step_size,
+        param_radius,
+        param_max_radius,
+        param_side_length,
+        points_per_layer=num_points // 5
+    )
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=x,
+            y=y,
+            z=z,
+            mode="lines",
+            line=dict(
+                width=4,
+                color=stress,
+                colorscale="RdYlGn_r",
+                colorbar=dict(title="Predicted Stress (MPa)")
+            )
+        )
+    )
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title="X (mm)",
+            yaxis_title="Y (mm)",
+            zaxis_title="Z (mm)",
+            aspectmode="cube"
+        ),
+        height=650
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Export ML-driven toolpath
+    path_df = pd.DataFrame({
+        "X_mm": x,
+        "Y_mm": y,
+        "Z_mm": z,
+        "Predicted_Stress_MPa": stress
+    })
+
+    st.download_button(
+        "📥 Download ML‑Driven Toolpath (CSV)",
+        path_df.to_csv(index=False),
+        file_name="ml_driven_toolpath.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
         
         with col1:
             fig = px.line_3d(
