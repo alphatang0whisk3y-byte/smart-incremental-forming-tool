@@ -712,6 +712,7 @@ if generate:
         else:
                             st.info("💡 Enable 'Show Path Comparison' to see all options.")
     
+    # TAB 3/4: ML vs FEM Comparison (only if FEM data uploaded)
     if fem_data is not None and tab4 is not None:
         with tab4:
             st.subheader("🔬 ML Prediction vs FEM Simulation Comparison")
@@ -753,8 +754,6 @@ if generate:
                         delta=f"±{depth_error:.2f} mm"
                     )
                 
-                # Note: We don't have actual stress from dynain.txt in current parsing
-                # This would require parsing INITIAL_STRESS_SHELL more thoroughly
                 st.info("""
                 **Note:** Full stress comparison requires 
                 complete stress tensor extraction from dynain.txt.
@@ -857,25 +856,45 @@ Generated: {pd.Timestamp.now()}
                 use_container_width=True
             )
     
-    # Original tab3 becomes tab3 or tab4 depending on fem_data
-    target_tab = tab3 if fem_data is None else st.container()
-    
-    if fem_data is None:
-        with tab3:
-            display_process_details()
-    else:
-        # Skip to avoid duplicate content - details already shown
-        pass
-
-def display_process_details():
-    """Display process details and specifications"""
-    # This content moved from tab3
-    pass
-
-# Add this at the end of tab3 section (when fem_data is None)
-if generate and fem_data is None:
-    with tab3:
+    # TAB 3: Process Details (always show as last tab)
+    target_tab = tab3 if fem_data is None else tab3
+    with target_tab:
         st.subheader("Process Details & Specifications")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Target Geometry")
+            st.write(f"**Shape:** {geometry_input.title()}")
+            st.write(f"**Description:** {GEOMETRY_PATH_RECOMMENDATIONS[geometry_input]['description']}")
+            st.write(f"**Target Depth:** {depth_input} mm")
+            st.write(f"**Base Radius:** {base_radius} mm")
+            
+            st.markdown("#### Tool Path Details")
+            st.write(f"**Selected Path:** {best_path}")
+            st.write(f"**Total Layers:** {num_layers}")
+            st.write(f"**Layer Step:** {step_down} mm")
+            st.write(f"**Points/Layer:** {num_points_per_layer}")
+            
+        with col2:
+            st.markdown("#### Predicted Performance")
+            st.write(f"**Max Stress:** {best_stress:.2f} MPa")
+            st.write(f"**Safety Factor:** {safety_factor:.2f}")
+            
+            st.markdown("#### ML Model Info")
+            st.write(f"**Algorithm:** Ridge Regression")
+            st.write(f"**Training Data:** {model_data['training_samples']} samples")
+            st.write(f"**Model R²:** {model_data['r2']:.3f}")
+            st.write(f"**Model RMSE:** {model_data['rmse']:.2f} MPa")
+            
+            if fem_data is None:
+                st.markdown("---")
+                st.info("""
+                💡 **Upload FEM Results**
+                
+                Upload your dynain.txt file in the sidebar to compare 
+                ML predictions with actual FEM simulation results.
+                """)
         
         col1, col2 = st.columns(2)
         
