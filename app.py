@@ -896,8 +896,10 @@ Generated: {pd.Timestamp.now()}
                 ML predictions with actual FEM simulation results.
                 """)
 
-# ================= INITIAL STATE (NO GENERATION YET) =================
 else:
+    # Initial state - show instructions when generate button hasn't been clicked
+    st.info("""
+    ### 🚀 How to Use
         
         col1, col2 = st.columns(2)
         
