@@ -118,6 +118,119 @@ GEOMETRY_PATH_RECOMMENDATIONS = {
     }
 }
 
+# ================= DYNAIN.TXT PARSER =================
+
+def parse_dynain_file(uploaded_file):
+    """
+    Parse dynain.txt file and extract stress, strain, thickness data
+    
+    Returns: dict with extracted data
+    """
+    try:
+        content = uploaded_file.read().decode('utf-8')
+        lines = content.split('\n')
+        
+        nodes = []
+        thicknesses = []
+        stresses = []
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Parse NODE data
+            if line.startswith('*NODE'):
+                i += 1
+                while i < len(lines) and not lines[i].startswith('*'):
+                    node_line = lines[i].strip()
+                    if node_line:
+                        parts = node_line.split()
+                        try:
+                            node_id = int(parts[0])
+                            x = float(parts[1])
+                            y = float(parts[2])
+                            z = float(parts[3])
+                            nodes.append({'id': node_id, 'x': x, 'y': y, 'z': z})
+                        except:
+                            pass
+                    i += 1
+                continue
+            
+            # Parse ELEMENT_SHELL_THICKNESS
+            elif line.startswith('*ELEMENT_SHELL_THICKNESS'):
+                i += 1
+                while i < len(lines) and not lines[i].startswith('*'):
+                    elem_line = lines[i].strip()
+                    if elem_line:
+                        parts = elem_line.split()
+                        try:
+                            elem_id = int(parts[0])
+                            # Next line: thickness values at 4 integration points
+                            i += 1
+                            if i < len(lines):
+                                thick_line = lines[i].strip()
+                                thick_parts = thick_line.split()
+                                t1 = float(thick_parts[0])
+                                t2 = float(thick_parts[1])
+                                t3 = float(thick_parts[2])
+                                t4 = float(thick_parts[3])
+                                avg_thickness = (t1 + t2 + t3 + t4) / 4.0
+                                thicknesses.append(avg_thickness)
+                        except:
+                            pass
+                    i += 1
+                continue
+            
+            # Parse INITIAL_STRESS_SHELL
+            elif line.startswith('*INITIAL_STRESS_SHELL'):
+                i += 1
+                while i < len(lines) and not lines[i].startswith('*'):
+                    stress_line = lines[i].strip()
+                    if stress_line:
+                        parts = stress_line.split()
+                        try:
+                            elem_id = int(parts[0])
+                            # Assuming stress components are in parts[1:]
+                            # Store for later analysis
+                            stresses.append({'elem_id': elem_id})
+                        except:
+                            pass
+                    i += 1
+                continue
+            
+            i += 1
+        
+        # Calculate statistics
+        nodes_df = pd.DataFrame(nodes)
+        
+        result = {
+            'num_nodes': len(nodes_df),
+            'num_elements': len(thicknesses),
+            'success': True
+        }
+        
+        if len(nodes_df) > 0:
+            result['centroid_x'] = nodes_df['x'].mean()
+            result['centroid_y'] = nodes_df['y'].mean()
+            result['centroid_z'] = nodes_df['z'].mean()
+            result['min_z'] = nodes_df['z'].min()
+            result['max_z'] = nodes_df['z'].max()
+            result['actual_depth'] = abs(result['max_z'] - result['min_z'])
+        
+        if len(thicknesses) > 0:
+            result['mean_thickness'] = np.mean(thicknesses)
+            result['min_thickness'] = np.min(thicknesses)
+            result['max_thickness'] = np.max(thicknesses)
+            result['std_thickness'] = np.std(thicknesses)
+        
+        return result
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
 # ================= HELPER FUNCTIONS =================
 
 def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
@@ -368,15 +481,39 @@ depth_input = st.sidebar.slider(
 
 st.sidebar.header("⚙️ Geometry Parameters")
 base_radius = st.sidebar.slider("Base Radius (mm)", 20.0, 80.0, 50.0, 5.0)
-param_radius = st.sidebar.slider("Tool Radius (mm)", 5.0, 20.0, 10.0, 0.5)
-param_max_radius = st.sidebar.slider("Max Tool Radius (mm)", 10.0, 25.0, 15.0, 0.5)
 
 st.sidebar.header("🛠️ Process Parameters")
 step_down = st.sidebar.slider("Layer Step Down (mm)", 0.2, 1.0, 0.5, 0.1, help="Depth increment per layer")
 num_points_per_layer = st.sidebar.slider("Points per Layer", 50, 200, 100, 10)
 
+# Fixed tool parameters (not user-adjustable)
+param_radius = 10.0
+param_max_radius = 15.0
+param_side_length = 12.0
+
 st.sidebar.header("📊 Visualization")
 show_comparison = st.sidebar.checkbox("Show Path Comparison", value=True)
+
+st.sidebar.markdown("---")
+st.sidebar.header("📤 Upload FEM Results")
+st.sidebar.markdown("**Upload dynain.txt** to compare FEM simulation with ML prediction")
+st.sidebar.caption("⚠️ Ensure simulation used the same parameters as set above")
+
+uploaded_dynain = st.sidebar.file_uploader(
+    "Choose dynain.txt file",
+    type=["txt"],
+    help="Upload LS-DYNA dynain.txt output file"
+)
+
+fem_data = None
+if uploaded_dynain is not None:
+    with st.spinner("📊 Parsing FEM results..."):
+        fem_data = parse_dynain_file(uploaded_dynain)
+        if fem_data['success']:
+            st.sidebar.success(f"✅ FEM data loaded: {fem_data['num_elements']} elements")
+        else:
+            st.sidebar.error(f"❌ Parse error: {fem_data.get('error', 'Unknown error')}")
+            fem_data = None
 
 generate = st.sidebar.button("🚀 Generate Optimal Path", type="primary", use_container_width=True)
 
@@ -448,11 +585,20 @@ if generate:
     st.markdown("---")
     
     # ================= TABS =================
-    tab1, tab2, tab3 = st.tabs([
-        "🎯 Complete Tool Path (Multi-Layer)",
-        "📈 Path Comparison",
-        "📋 Process Details"
-    ])
+    if fem_data is not None:
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "🎯 Complete Tool Path (Multi-Layer)",
+            "📈 Path Comparison",
+            "🔬 ML vs FEM Comparison",
+            "📋 Process Details"
+        ])
+    else:
+        tab1, tab2, tab3 = st.tabs([
+            "🎯 Complete Tool Path (Multi-Layer)",
+            "📈 Path Comparison",
+            "📋 Process Details"
+        ])
+        tab4 = None
     
     with tab1:
         st.subheader(f"Complete Tool Movement - {best_path.upper()} Path for {geometry_input.upper()}")
@@ -564,12 +710,206 @@ if generate:
                 - {len(comp_df)} paths evaluated
                 """)
         else:
-            st.info("💡 Enable 'Show Path Comparison' to see all options.")
+                            st.info("💡 Enable 'Show Path Comparison' to see all options.")
     
+    if fem_data is not None and tab4 is not None:
+        with tab4:
+            st.subheader("🔬 ML Prediction vs FEM Simulation Comparison")
+            
+            st.markdown("""
+            **Comparing AI predictions with actual FEM simulation results**
+            
+            This comparison validates the machine learning model against physics-based simulation.
+            """)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown("### 🤖 ML Prediction")
+                st.metric("Predicted Stress", f"{best_stress:.2f} MPa")
+                st.metric("Target Depth", f"{depth_input:.2f} mm")
+                st.metric("Base Radius", f"{base_radius:.1f} mm")
+                st.info("Based on trained Ridge regression model")
+            
+            with col2:
+                st.markdown("### 🧪 FEM Simulation")
+                st.metric("Elements Analyzed", f"{fem_data['num_elements']:,}")
+                st.metric("Nodes", f"{fem_data['num_nodes']:,}")
+                if 'actual_depth' in fem_data:
+                    st.metric("Actual Depth", f"{fem_data['actual_depth']:.2f} mm")
+                if 'mean_thickness' in fem_data:
+                    st.metric("Mean Thickness", f"{fem_data['mean_thickness']:.4f} mm")
+                st.success("Physics-based simulation results")
+            
+            with col3:
+                st.markdown("### 📊 Comparison Metrics")
+                
+                if 'actual_depth' in fem_data:
+                    depth_error = abs(depth_input - fem_data['actual_depth'])
+                    depth_error_pct = (depth_error / depth_input) * 100
+                    st.metric(
+                        "Depth Accuracy",
+                        f"{100 - depth_error_pct:.1f}%",
+                        delta=f"±{depth_error:.2f} mm"
+                    )
+                
+                # Note: We don't have actual stress from dynain.txt in current parsing
+                # This would require parsing INITIAL_STRESS_SHELL more thoroughly
+                st.info("""
+                **Note:** Full stress comparison requires 
+                complete stress tensor extraction from dynain.txt.
+                Current version shows geometric validation.
+                """)
+            
+            st.markdown("---")
+            
+            # Detailed comparison table
+            st.markdown("#### Detailed Comparison")
+            
+            comparison_data = {
+                "Parameter": [
+                    "Target Depth",
+                    "Number of Elements",
+                    "Number of Nodes"
+                ],
+                "ML Input": [
+                    f"{depth_input:.2f} mm",
+                    "N/A",
+                    "N/A"
+                ],
+                "FEM Output": [
+                    f"{fem_data.get('actual_depth', 'N/A'):.2f} mm" if 'actual_depth' in fem_data else "N/A",
+                    f"{fem_data['num_elements']:,}",
+                    f"{fem_data['num_nodes']:,}"
+                ],
+                "Match": [
+                    "✅" if 'actual_depth' in fem_data and abs(depth_input - fem_data['actual_depth']) < 0.5 else "⚠️",
+                    "N/A",
+                    "N/A"
+                ]
+            }
+            
+            if 'mean_thickness' in fem_data:
+                comparison_data["Parameter"].append("Mean Thickness")
+                comparison_data["ML Input"].append("Predicted")
+                comparison_data["FEM Output"].append(f"{fem_data['mean_thickness']:.4f} mm")
+                comparison_data["Match"].append("📊")
+            
+            comp_df = pd.DataFrame(comparison_data)
+            st.dataframe(comp_df, hide_index=True, use_container_width=True)
+            
+            # Visualization of geometric comparison
+            if 'actual_depth' in fem_data:
+                st.markdown("#### Depth Comparison")
+                
+                fig = go.Figure()
+                
+                fig.add_trace(go.Bar(
+                    x=['Target (ML Input)', 'Actual (FEM)'],
+                    y=[depth_input, fem_data['actual_depth']],
+                    marker_color=['#1f77b4', '#ff7f0e'],
+                    text=[f"{depth_input:.2f} mm", f"{fem_data['actual_depth']:.2f} mm"],
+                    textposition='outside'
+                ))
+                
+                fig.update_layout(
+                    title="Forming Depth: Target vs Actual",
+                    yaxis_title="Depth (mm)",
+                    height=400
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Download comparison report
+            st.markdown("#### Export Comparison")
+            
+            report_text = f"""
+SMART INCREMENTAL FORMING - ML vs FEM COMPARISON REPORT
+{'='*60}
+
+Target Geometry: {geometry_input.upper()}
+Recommended Tool Path: {best_path.upper()}
+
+ML PREDICTION:
+- Predicted Stress: {best_stress:.2f} MPa
+- Target Depth: {depth_input:.2f} mm
+- Base Radius: {base_radius:.1f} mm
+- Number of Layers: {num_layers}
+
+FEM SIMULATION:
+- Elements: {fem_data['num_elements']:,}
+- Nodes: {fem_data['num_nodes']:,}
+- Actual Depth: {fem_data.get('actual_depth', 'N/A'):.2f} mm
+- Mean Thickness: {fem_data.get('mean_thickness', 'N/A'):.4f} mm
+
+VALIDATION:
+- Depth Match: {abs(depth_input - fem_data.get('actual_depth', 0)) < 0.5}
+- Depth Error: {abs(depth_input - fem_data.get('actual_depth', 0)):.2f} mm
+
+Generated: {pd.Timestamp.now()}
+"""
+            
+            st.download_button(
+                "📥 Download Comparison Report",
+                report_text,
+                f"ml_fem_comparison_{geometry_input}.txt",
+                "text/plain",
+                use_container_width=True
+            )
+    
+    # Original tab3 becomes tab3 or tab4 depending on fem_data
+    target_tab = tab3 if fem_data is None else st.container()
+    
+    if fem_data is None:
+        with tab3:
+            display_process_details()
+    else:
+        # Skip to avoid duplicate content - details already shown
+        pass
+
+def display_process_details():
+    """Display process details and specifications"""
+    # This content moved from tab3
+    pass
+
+# Add this at the end of tab3 section (when fem_data is None)
+if generate and fem_data is None:
     with tab3:
         st.subheader("Process Details & Specifications")
         
         col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Target Geometry")
+            st.write(f"**Shape:** {geometry_input.title()}")
+            st.write(f"**Description:** {GEOMETRY_PATH_RECOMMENDATIONS[geometry_input]['description']}")
+            st.write(f"**Target Depth:** {depth_input} mm")
+            st.write(f"**Base Radius:** {base_radius} mm")
+            
+            st.markdown("#### Tool Path Details")
+            st.write(f"**Selected Path:** {best_path}")
+            st.write(f"**Total Layers:** {num_layers}")
+            st.write(f"**Layer Step:** {step_down} mm")
+            st.write(f"**Points/Layer:** {num_points_per_layer}")
+            
+        with col2:
+            st.markdown("#### Predicted Performance")
+            st.write(f"**Max Stress:** {best_stress:.2f} MPa")
+            st.write(f"**Safety Factor:** {safety_factor:.2f}")
+            
+            st.markdown("#### ML Model Info")
+            st.write(f"**Algorithm:** Ridge Regression")
+            st.write(f"**Training Data:** {model_data['training_samples']} samples")
+            st.write(f"**Model R²:** {model_data['r2']:.3f}")
+            st.write(f"**Model RMSE:** {model_data['rmse']:.2f} MPa")
+            
+            st.markdown("---")
+            st.info("""
+            💡 **Upload FEM Results**
+            
+            Upload your dynain.txt file in the sidebar to compare 
+            ML predictions with actual FEM simulation results.
+            """)
         
         with col1:
             st.markdown("#### Target Geometry")
