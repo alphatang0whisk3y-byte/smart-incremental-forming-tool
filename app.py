@@ -712,9 +712,9 @@ if generate:
         else:
                             st.info("💡 Enable 'Show Path Comparison' to see all options.")
     
-    # TAB 3/4: ML vs FEM Comparison (only if FEM data uploaded)
-    if fem_data is not None and tab4 is not None:
-        with tab4:
+    # TAB 3: ML vs FEM Comparison (only when FEM data is uploaded)
+    if fem_data is not None:
+        with tab3:
             st.subheader("🔬 ML Prediction vs FEM Simulation Comparison")
             
             st.markdown("""
@@ -856,9 +856,9 @@ Generated: {pd.Timestamp.now()}
                 use_container_width=True
             )
     
-    # TAB 3: Process Details (always show as last tab)
-    target_tab = tab3 if fem_data is None else tab3
-    with target_tab:
+    # TAB 3 or TAB 4: Process Details (depends on whether FEM data exists)
+    process_details_tab = tab4 if fem_data is not None else tab3
+    with process_details_tab:
         st.subheader("Process Details & Specifications")
         
         col1, col2 = st.columns(2)
