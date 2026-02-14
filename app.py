@@ -20,33 +20,22 @@ st.set_page_config(
 def train_ml_model_from_csv():
     """Train ML model from CSV data"""
     try:
-        # Load training data
         df = pd.read_csv('simulation_results_progress_0300.csv')
-        
-        # Filter only successful simulations
         df = df[df['status'] == 'SUCCESS'].copy()
-        
-        # Drop rows with missing target variable
         df = df.dropna(subset=['max_stress_MPa'])
         
-        # Feature engineering
         df['depth'] = df['depth_input_mm']
-        
-        # Fill missing parameter columns with reasonable defaults
         df['param_radius_filled'] = df['param_radius'].fillna(10.0)
         df['param_max_radius_filled'] = df['param_max_radius'].fillna(df['param_radius_filled'] * 1.5)
         df['param_side_length_filled'] = df['param_side_length'].fillna(12.0)
         
-        # Polynomial features
         df['depth_squared'] = df['depth'] ** 2
         df['radius_squared'] = df['param_radius_filled'] ** 2
         df['max_radius_squared'] = df['param_max_radius_filled'] ** 2
         
-        # Encode path type
         encoder = LabelEncoder()
         df['path_encoded'] = encoder.fit_transform(df['path_type'])
         
-        # Define features
         feature_cols = [
             'depth', 'path_encoded', 'param_radius_filled', 
             'param_max_radius_filled', 'param_side_length_filled',
@@ -56,25 +45,19 @@ def train_ml_model_from_csv():
         X = df[feature_cols]
         y = df['max_stress_MPa']
         
-        # Train-test split
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         
-        # Train Ridge regression model
         model = Ridge(alpha=1.0)
         model.fit(X_train, y_train)
         
-        # Evaluate
         y_pred = model.predict(X_test)
         mae = mean_absolute_error(y_test, y_pred)
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         r2 = r2_score(y_test, y_pred)
         
-        # Get unique path types
         path_types = sorted(df['path_type'].unique().tolist())
         
-        model_data = {
+        return {
             'model': model,
             'encoder': encoder,
             'feature_cols': feature_cols,
@@ -82,18 +65,9 @@ def train_ml_model_from_csv():
             'mae': mae,
             'rmse': rmse,
             'r2': r2,
-            'training_samples': len(df),
-            'feature_set_name': 'polynomial_v1'
+            'training_samples': len(df)
         }
         
-        st.success(f"✅ Model trained successfully! R² = {r2:.3f}, RMSE = {rmse:.2f} MPa")
-        
-        return model_data
-        
-    except FileNotFoundError:
-        st.error("❌ Training data file 'simulation_results_progress_0300.csv' not found!")
-        st.info("Please upload the CSV file to the same directory as this script.")
-        return None
     except Exception as e:
         st.error(f"❌ Error training model: {e}")
         return None
@@ -105,92 +79,46 @@ with st.spinner("🔄 Training ML model from data..."):
 if model_data is None:
     st.stop()
 
-# Extract model components
 ml_model = model_data['model']
 encoder = model_data['encoder']
 feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
 
+# ================= GEOMETRY TO PATH MAPPING =================
+GEOMETRY_PATH_RECOMMENDATIONS = {
+    'cone': {
+        'recommended_paths': ['circular', 'spiral'],
+        'description': 'Conical shape with circular base',
+        'num_layers': 'auto'  # Based on depth
+    },
+    'pyramid': {
+        'recommended_paths': ['square', 'hexagon'],
+        'description': 'Pyramid with polygonal base',
+        'num_layers': 'auto'
+    },
+    'dome': {
+        'recommended_paths': ['circular', 'spiral', 'concentric'],
+        'description': 'Hemispherical dome shape',
+        'num_layers': 'auto'
+    },
+    'bowl': {
+        'recommended_paths': ['circular', 'spiral_inward', 'concentric'],
+        'description': 'Bowl or cup shape',
+        'num_layers': 'auto'
+    },
+    'funnel': {
+        'recommended_paths': ['spiral', 'spiral_inward'],
+        'description': 'Funnel shape with tapered profile',
+        'num_layers': 'auto'
+    },
+    'custom_shape': {
+        'recommended_paths': path_types,
+        'description': 'Custom geometry - all paths available',
+        'num_layers': 'auto'
+    }
+}
+
 # ================= HELPER FUNCTIONS =================
-def generate_ml_driven_toolpath(
-    path_type,
-    max_depth,
-    step_size,
-    param_radius,
-    param_max_radius,
-    param_side_length,
-    points_per_layer=200
-):
-    """
-    Generates an ML-driven incremental forming tool path.
-    Tool moves layer-by-layer and adapts geometry using ML stress prediction.
-    """
-
-    all_x, all_y, all_z, all_stress = [], [], [], []
-
-    depth_levels = np.arange(0, max_depth + step_size, step_size)
-
-    base_radius = 50
-    reference_stress = 300  # MPa (normalization reference)
-
-    for d in depth_levels:
-        stress = predict_stress(
-            path_type,
-            d,
-            param_radius,
-            param_max_radius,
-            param_side_length
-        )
-
-        # Stress-based radius adaptation (physics-inspired)
-        stress_factor = np.clip(1 - (stress / reference_stress), 0.6, 1.05)
-        effective_radius = base_radius * stress_factor
-
-        t = np.linspace(0, 2 * np.pi, points_per_layer)
-
-        if path_type in ["circular", "concentric"]:
-            x = effective_radius * np.cos(t)
-            y = effective_radius * np.sin(t)
-
-        elif path_type == "spiral":
-            r = effective_radius * (1 - t / (2 * np.pi))
-            x = r * np.cos(t * 2)
-            y = r * np.sin(t * 2)
-
-        elif path_type == "square":
-            side = effective_radius
-            pts = points_per_layer // 4
-            x = np.concatenate([
-                np.linspace(-side, side, pts),
-                np.full(pts, side),
-                np.linspace(side, -side, pts),
-                np.full(pts, -side)
-            ])
-            y = np.concatenate([
-                np.full(pts, -side),
-                np.linspace(-side, side, pts),
-                np.full(pts, side),
-                np.linspace(side, -side, pts)
-            ])
-
-        else:
-            # fallback
-            x = effective_radius * np.cos(t)
-            y = effective_radius * np.sin(t)
-
-        z = np.full_like(x, -d)
-
-        all_x.extend(x)
-        all_y.extend(y)
-        all_z.extend(z)
-        all_stress.extend([stress] * len(x))
-
-    return (
-        np.array(all_x),
-        np.array(all_y),
-        np.array(all_z),
-        np.array(all_stress)
-    )
 
 def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
     """Prepare features for ML prediction"""
@@ -216,11 +144,12 @@ def predict_stress(path_type, depth, param_radius=10.0, param_max_radius=15.0, p
     stress_prediction = ml_model.predict(features)[0]
     return stress_prediction
 
-def find_best_path(depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
-    """Find the best path type (lowest stress) for given depth"""
-    predictions = {}
+def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
+    """Find the best path type for a given target geometry"""
+    recommended_paths = GEOMETRY_PATH_RECOMMENDATIONS[geometry]['recommended_paths']
     
-    for path in path_types:
+    predictions = {}
+    for path in recommended_paths:
         try:
             stress = predict_stress(path, depth, param_radius, param_max_radius, param_side_length)
             predictions[path] = stress
@@ -237,109 +166,141 @@ def find_best_path(depth, param_radius=10.0, param_max_radius=15.0, param_side_l
     
     return best_path, best_stress, valid_predictions
 
-def generate_path_geometry(path_type, depth, num_points=300):
-    """Generate 3D coordinates for different path types"""
-    t = np.linspace(0, 2*np.pi, num_points)
+def calculate_num_layers(depth, step_down=0.5):
+    """Calculate number of layers based on depth and step-down distance"""
+    return max(int(np.ceil(depth / step_down)), 3)
+
+def generate_complete_tool_path(path_type, geometry, depth, base_radius=50, num_points_per_layer=100):
+    """
+    Generate complete multi-layer tool path showing actual forming operation
     
-    if path_type == 'circular':
-        radius = 50
-        x = radius * np.cos(t)
-        y = radius * np.sin(t)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'spiral':
-        radius = 50 * (1 - t/(2*np.pi) * 0.5)
-        x = radius * np.cos(t * 3)
-        y = radius * np.sin(t * 3)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'spiral_inward':
-        radius = 50 * (t/(2*np.pi))
-        x = radius * np.cos(t * 5)
-        y = radius * np.sin(t * 5)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'square':
-        side = 40
-        x = np.concatenate([
-            np.linspace(-side, side, num_points//4),
-            np.full(num_points//4, side),
-            np.linspace(side, -side, num_points//4),
-            np.full(num_points//4, -side)
-        ])
-        y = np.concatenate([
-            np.full(num_points//4, -side),
-            np.linspace(-side, side, num_points//4),
-            np.full(num_points//4, side),
-            np.linspace(side, -side, num_points//4)
-        ])
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'hexagon':
-        angles = np.linspace(0, 2*np.pi, 7)
-        radius = 40
-        hex_x = radius * np.cos(angles)
-        hex_y = radius * np.sin(angles)
-        x = np.interp(np.linspace(0, 6, num_points), np.arange(7), hex_x)
-        y = np.interp(np.linspace(0, 6, num_points), np.arange(7), hex_y)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'star':
-        outer_r, inner_r = 50, 25
-        points = 5
-        angles = np.linspace(0, 2*np.pi, points*2+1)
-        radii = np.array([outer_r if i % 2 == 0 else inner_r for i in range(len(angles))])
-        star_x = radii * np.cos(angles)
-        star_y = radii * np.sin(angles)
-        x = np.interp(np.linspace(0, points*2, num_points), np.arange(len(star_x)), star_x)
-        y = np.interp(np.linspace(0, points*2, num_points), np.arange(len(star_y)), star_y)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'rose':
-        k = 3
-        radius = 50 * np.cos(k * t)
-        x = radius * np.cos(t)
-        y = radius * np.sin(t)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'ellipse':
-        a, b = 50, 30
-        x = a * np.cos(t)
-        y = b * np.sin(t)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'zigzag':
-        x = 40 * np.sin(t * 5)
-        y = np.linspace(-40, 40, num_points)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'figure8':
-        scale = 30
-        x = scale * np.sin(t)
-        y = scale * np.sin(t) * np.cos(t)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'concentric':
-        num_circles = 3
-        radius = 50 * (1 - (t / (2*np.pi)) % (1/num_circles) * num_circles)
-        x = radius * np.cos(t * num_circles)
-        y = radius * np.sin(t * num_circles)
-        z = -np.linspace(0, depth, num_points)
-        
-    elif path_type == 'lissajous':
-        A, B = 40, 30
-        a, b = 3, 4
-        x = A * np.sin(a * t)
-        y = B * np.sin(b * t)
-        z = -np.linspace(0, depth, num_points)
-        
-    else:
-        radius = 50
-        x = radius * np.cos(t)
-        y = radius * np.sin(t)
-        z = -np.linspace(0, depth, num_points)
+    Returns: x, y, z arrays for complete tool path with multiple passes
+    """
+    num_layers = calculate_num_layers(depth, step_down=0.5)
     
-    return x, y, z
+    x_complete = []
+    y_complete = []
+    z_complete = []
+    
+    # Generate path for each layer
+    for layer in range(num_layers):
+        # Calculate depth for this layer
+        layer_depth = depth * (layer + 1) / num_layers
+        
+        # Calculate radius for this layer (for cone/funnel shapes)
+        if geometry in ['cone', 'funnel']:
+            # Radius decreases as we go deeper
+            layer_radius = base_radius * (1 - (layer + 1) / (num_layers + 2))
+        elif geometry in ['dome', 'bowl']:
+            # Spherical profile
+            progress = (layer + 1) / num_layers
+            layer_radius = base_radius * np.sqrt(1 - progress**2)
+        elif geometry == 'pyramid':
+            # Linear taper for pyramid
+            layer_radius = base_radius * (1 - (layer + 1) / (num_layers + 1))
+        else:
+            layer_radius = base_radius
+        
+        # Generate path points for this layer
+        t = np.linspace(0, 2*np.pi, num_points_per_layer)
+        
+        if path_type == 'circular':
+            x_layer = layer_radius * np.cos(t)
+            y_layer = layer_radius * np.sin(t)
+            
+        elif path_type == 'spiral':
+            # Spiral inward during each layer
+            radius_variation = np.linspace(layer_radius, layer_radius * 0.8, num_points_per_layer)
+            x_layer = radius_variation * np.cos(t * 2)
+            y_layer = radius_variation * np.sin(t * 2)
+            
+        elif path_type == 'spiral_inward':
+            radius_variation = np.linspace(layer_radius, layer_radius * 0.6, num_points_per_layer)
+            x_layer = radius_variation * np.cos(t * 3)
+            y_layer = radius_variation * np.sin(t * 3)
+            
+        elif path_type == 'square':
+            side = layer_radius
+            x_layer = np.concatenate([
+                np.linspace(-side, side, num_points_per_layer//4),
+                np.full(num_points_per_layer//4, side),
+                np.linspace(side, -side, num_points_per_layer//4),
+                np.full(num_points_per_layer//4, -side)
+            ])
+            y_layer = np.concatenate([
+                np.full(num_points_per_layer//4, -side),
+                np.linspace(-side, side, num_points_per_layer//4),
+                np.full(num_points_per_layer//4, side),
+                np.linspace(side, -side, num_points_per_layer//4)
+            ])
+            
+        elif path_type == 'hexagon':
+            angles = np.linspace(0, 2*np.pi, 7)
+            hex_x = layer_radius * np.cos(angles)
+            hex_y = layer_radius * np.sin(angles)
+            x_layer = np.interp(np.linspace(0, 6, num_points_per_layer), np.arange(7), hex_x)
+            y_layer = np.interp(np.linspace(0, 6, num_points_per_layer), np.arange(7), hex_y)
+            
+        elif path_type == 'star':
+            outer_r, inner_r = layer_radius, layer_radius * 0.5
+            points = 5
+            angles = np.linspace(0, 2*np.pi, points*2+1)
+            radii = np.array([outer_r if i % 2 == 0 else inner_r for i in range(len(angles))])
+            star_x = radii * np.cos(angles)
+            star_y = radii * np.sin(angles)
+            x_layer = np.interp(np.linspace(0, points*2, num_points_per_layer), np.arange(len(star_x)), star_x)
+            y_layer = np.interp(np.linspace(0, points*2, num_points_per_layer), np.arange(len(star_y)), star_y)
+            
+        elif path_type == 'rose':
+            k = 3
+            radius_pattern = layer_radius * np.abs(np.cos(k * t))
+            x_layer = radius_pattern * np.cos(t)
+            y_layer = radius_pattern * np.sin(t)
+            
+        elif path_type == 'ellipse':
+            a, b = layer_radius, layer_radius * 0.6
+            x_layer = a * np.cos(t)
+            y_layer = b * np.sin(t)
+            
+        elif path_type == 'zigzag':
+            x_layer = layer_radius * 0.8 * np.sin(t * 5)
+            y_layer = np.linspace(-layer_radius, layer_radius, num_points_per_layer)
+            
+        elif path_type == 'figure8':
+            x_layer = layer_radius * 0.6 * np.sin(t)
+            y_layer = layer_radius * 0.6 * np.sin(t) * np.cos(t)
+            
+        elif path_type == 'concentric':
+            num_circles = 3
+            radius_pattern = layer_radius * (1 - (t / (2*np.pi)) % (1/num_circles) * num_circles)
+            x_layer = radius_pattern * np.cos(t * num_circles)
+            y_layer = radius_pattern * np.sin(t * num_circles)
+            
+        elif path_type == 'lissajous':
+            A, B = layer_radius * 0.8, layer_radius * 0.6
+            a, b = 3, 4
+            x_layer = A * np.sin(a * t)
+            y_layer = B * np.sin(b * t)
+            
+        else:  # Default circular
+            x_layer = layer_radius * np.cos(t)
+            y_layer = layer_radius * np.sin(t)
+        
+        # Z coordinate for this entire layer
+        z_layer = np.full(len(x_layer), -layer_depth)
+        
+        # Append to complete path
+        x_complete.extend(x_layer)
+        y_complete.extend(y_layer)
+        z_complete.extend(z_layer)
+        
+        # Add transition to next layer (retract slightly)
+        if layer < num_layers - 1:
+            x_complete.append(x_layer[-1])
+            y_complete.append(y_layer[-1])
+            z_complete.append(-layer_depth + 0.2)  # Retract 0.2mm
+    
+    return np.array(x_complete), np.array(y_complete), np.array(z_complete), num_layers
 
 # ================= CUSTOM CSS =================
 st.markdown("""
@@ -357,6 +318,15 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
+    .geometry-box {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1.5rem;
+        border-radius: 15px;
+        color: white;
+        font-size: 1.1rem;
+        text-align: center;
+        margin: 1rem 0;
+    }
     .recommendation-box {
         background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
         padding: 2rem;
@@ -367,225 +337,194 @@ st.markdown("""
         text-align: center;
         margin: 1rem 0;
     }
-    .info-box {
-        background-color: #e3f2fd;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 5px solid #2196f3;
-        margin: 1rem 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ================= TITLE =================
 st.markdown('<p class="main-header">🔧 Smart Incremental Forming - ML Path Optimizer</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">AI-Powered Tool-Path Selection & Stress Prediction System</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">AI-Powered Tool-Path Optimization for Target Geometries</p>', unsafe_allow_html=True)
 st.markdown("---")
 
 # ================= SIDEBAR =================
-st.sidebar.header("🎯 Input Parameters")
+st.sidebar.header("🎯 Target Geometry")
 
-st.sidebar.subheader("📐 Shape Selection")
-shape_input = st.sidebar.selectbox(
-    "Select Shape Type",
-    options=['Auto (ML Recommends)'] + path_types,
-    help="Choose 'Auto' to let ML find the best path type"
+geometry_input = st.sidebar.selectbox(
+    "What geometry do you want to form?",
+    options=['cone', 'pyramid', 'dome', 'bowl', 'funnel', 'custom_shape'],
+    format_func=lambda x: x.replace('_', ' ').title(),
+    help="Select the target shape you want to create"
 )
 
+st.sidebar.markdown(f"**Description:** {GEOMETRY_PATH_RECOMMENDATIONS[geometry_input]['description']}")
+
 depth_input = st.sidebar.slider(
-    "Forming Depth (mm)",
+    "Target Depth (mm)",
     min_value=1.0,
     max_value=10.0,
     value=4.0,
     step=0.5,
-    help="Target forming depth"
+    help="Maximum forming depth"
 )
 
-st.sidebar.subheader("⚙️ Advanced Parameters")
-with st.sidebar.expander("Shape Parameters"):
-    param_radius = st.slider("Radius (mm)", 5.0, 20.0, 10.0, 0.5)
-    param_max_radius = st.slider("Max Radius (mm)", 10.0, 25.0, 15.0, 0.5)
-    param_side_length = st.slider("Side Length (mm)", 8.0, 20.0, 12.0, 0.5)
+st.sidebar.header("⚙️ Geometry Parameters")
+base_radius = st.sidebar.slider("Base Radius (mm)", 20.0, 80.0, 50.0, 5.0)
+param_radius = st.sidebar.slider("Tool Radius (mm)", 5.0, 20.0, 10.0, 0.5)
+param_max_radius = st.sidebar.slider("Max Tool Radius (mm)", 10.0, 25.0, 15.0, 0.5)
 
-st.sidebar.subheader("📊 Visualization")
-num_points = st.sidebar.slider("Path Resolution", 100, 500, 300, 50)
-show_comparison = st.sidebar.checkbox("Show All Path Comparisons", value=True)
+st.sidebar.header("🛠️ Process Parameters")
+step_down = st.sidebar.slider("Layer Step Down (mm)", 0.2, 1.0, 0.5, 0.1, help="Depth increment per layer")
+num_points_per_layer = st.sidebar.slider("Points per Layer", 50, 200, 100, 10)
 
-generate = st.sidebar.button("🚀 Generate & Predict", type="primary", use_container_width=True)
+st.sidebar.header("📊 Visualization")
+show_comparison = st.sidebar.checkbox("Show Path Comparison", value=True)
+
+generate = st.sidebar.button("🚀 Generate Optimal Path", type="primary", use_container_width=True)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🤖 Model Information")
 st.sidebar.info(f"""
-**Model Type:** Ridge Regression (Polynomial)  
-**Features:** {len(feature_cols)}  
+**Model Type:** Ridge Regression  
 **Training Samples:** {model_data['training_samples']}  
 **R² Score:** {model_data['r2']:.3f}  
-**RMSE:** {model_data['rmse']:.2f} MPa  
-**MAE:** {model_data['mae']:.2f} MPa
+**RMSE:** {model_data['rmse']:.2f} MPa
 """)
 
 # ================= MAIN CONTENT =================
 
 if generate:
-    if shape_input == 'Auto (ML Recommends)':
-        with st.spinner("🔍 Analyzing all path types to find optimal solution..."):
-            best_path, best_stress, all_predictions = find_best_path(
-                depth_input, param_radius, param_max_radius, param_side_length
-            )
-        
-        if best_path is None:
-            st.error("❌ Failed to generate predictions. Please check input parameters.")
-            st.stop()
-        
-        st.markdown(f"""
-        <div class="recommendation-box">
-            🎯 RECOMMENDED PATH TYPE: <strong>{best_path.upper()}</strong><br>
-            Predicted Stress: {best_stress:.2f} MPa
-        </div>
-        """, unsafe_allow_html=True)
-        
-        selected_path = best_path
-        predicted_stress = best_stress
-        
-    else:
-        selected_path = shape_input
-        predicted_stress = predict_stress(
-            selected_path, depth_input, param_radius, param_max_radius, param_side_length
+    # Show target geometry
+    st.markdown(f"""
+    <div class="geometry-box">
+        🎯 TARGET GEOMETRY: <strong>{geometry_input.upper().replace('_', ' ')}</strong><br>
+        Target Depth: {depth_input} mm | Base Radius: {base_radius} mm
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Find best path
+    with st.spinner("🔍 Finding optimal tool path..."):
+        best_path, best_stress, all_predictions = find_best_path_for_geometry(
+            geometry_input, depth_input, param_radius, param_max_radius, base_radius
         )
-        all_predictions = None
-        
-        st.markdown(f"""
-        <div class="info-box">
-            <strong>Selected Path:</strong> {selected_path.upper()}<br>
-            <strong>Predicted Stress:</strong> {predicted_stress:.2f} MPa
-        </div>
-        """, unsafe_allow_html=True)
+    
+    if best_path is None:
+        st.error("❌ Failed to generate predictions.")
+        st.stop()
+    
+    # Calculate number of layers
+    num_layers = calculate_num_layers(depth_input, step_down)
+    
+    st.markdown(f"""
+    <div class="recommendation-box">
+        ✅ RECOMMENDED TOOL PATH: <strong>{best_path.upper()}</strong><br>
+        Predicted Stress: {best_stress:.2f} MPa | Number of Layers: {num_layers}
+    </div>
+    """, unsafe_allow_html=True)
     
     # ================= KEY METRICS =================
-    st.subheader("📊 Predicted Performance Metrics")
+    st.subheader("📊 Process Overview")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        st.metric("Max Stress", f"{predicted_stress:.2f} MPa")
+        st.metric("Tool Path", best_path.title())
     
     with col2:
-        estimated_strain = predicted_stress / 200000 * 100
-        st.metric("Est. Strain", f"{estimated_strain:.3f}%")
+        st.metric("Max Stress", f"{best_stress:.2f} MPa")
     
     with col3:
-        st.metric("Forming Depth", f"{depth_input:.1f} mm")
+        st.metric("Total Layers", num_layers)
     
     with col4:
-        safety_factor = 250 / predicted_stress if predicted_stress > 0 else 0
+        st.metric("Step Down", f"{step_down} mm")
+    
+    with col5:
+        safety_factor = 250 / best_stress if best_stress > 0 else 0
         st.metric(
             "Safety Factor",
             f"{safety_factor:.2f}",
-            delta="Safe" if safety_factor > 1.5 else "Check",
-            delta_color="normal" if safety_factor > 1.5 else "inverse"
+            delta="Safe" if safety_factor > 1.5 else "Check"
         )
     
     st.markdown("---")
     
     # ================= TABS =================
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🎯 3D Path Visualization",
+    tab1, tab2, tab3 = st.tabs([
+        "🎯 Complete Tool Path (Multi-Layer)",
         "📈 Path Comparison",
-        "🔬 Detailed Analysis",
-        "📋 Specifications"
+        "📋 Process Details"
     ])
     
     with tab1:
-        st.subheader(f"ML‑Driven Incremental Tool Path ({selected_path.upper()})")
-    
-        step_size = depth_input / 10  # realistic Δz (can be slider later)
-    
-        x, y, z, stress = generate_ml_driven_toolpath(
-            selected_path,
-            depth_input,
-            step_size,
-            param_radius,
-            param_max_radius,
-            param_side_length,
-            points_per_layer=num_points // 5
+        st.subheader(f"Complete Tool Movement - {best_path.upper()} Path for {geometry_input.upper()}")
+        st.markdown(f"**Showing all {num_layers} layers** with tool retractions between passes")
+        
+        # Generate complete path
+        x, y, z, layers = generate_complete_tool_path(
+            best_path, geometry_input, depth_input, base_radius, num_points_per_layer
         )
-    
-        fig = go.Figure()
-    
-        fig.add_trace(
-            go.Scatter3d(
-                x=x,
-                y=y,
-                z=z,
-                mode="lines",
-                line=dict(
-                    width=4,
-                    color=stress,
-                    colorscale="RdYlGn_r",
-                    colorbar=dict(title="Predicted Stress (MPa)")
-                )
-            )
-        )
-    
-        fig.update_layout(
-            scene=dict(
-                xaxis_title="X (mm)",
-                yaxis_title="Y (mm)",
-                zaxis_title="Z (mm)",
-                aspectmode="cube"
-            ),
-            height=650
-        )
-    
-        st.plotly_chart(fig, use_container_width=True)
-    
-        # Export ML-driven toolpath
-        path_df = pd.DataFrame({
-            "X_mm": x,
-            "Y_mm": y,
-            "Z_mm": z,
-            "Predicted_Stress_MPa": stress
-        })
-    
-        st.download_button(
-            "📥 Download ML‑Driven Toolpath (CSV)",
-            path_df.to_csv(index=False),
-            file_name="ml_driven_toolpath.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
+        
+        col1, col2 = st.columns([2, 1])
         
         with col1:
-            fig = px.line_3d(
+            # Create 3D visualization with color-coded layers
+            layer_colors = []
+            for i in range(len(z)):
+                layer_num = int(-z[i] / (depth_input / num_layers))
+                layer_colors.append(layer_num)
+            
+            fig = go.Figure(data=[go.Scatter3d(
                 x=x, y=y, z=z,
-                labels={"x": "X (mm)", "y": "Y (mm)", "z": "Z (mm)"},
-                title=f"{selected_path.title()} Path - Stress: {predicted_stress:.2f} MPa"
+                mode='lines',
+                line=dict(
+                    color=layer_colors,
+                    colorscale='Viridis',
+                    width=3,
+                    colorbar=dict(title="Layer")
+                ),
+                name='Tool Path'
+            )])
+            
+            fig.update_layout(
+                title=f"Complete {num_layers}-Layer Tool Path",
+                scene=dict(
+                    xaxis_title="X (mm)",
+                    yaxis_title="Y (mm)",
+                    zaxis_title="Z (mm)",
+                    aspectmode='cube',
+                    camera=dict(eye=dict(x=1.5, y=1.5, z=1.2))
+                ),
+                height=700
             )
-            fig.update_traces(line=dict(color=z, colorscale='RdYlGn_r', width=4))
-            fig.update_layout(scene=dict(aspectmode='cube'), height=600)
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
             st.markdown("#### Path Statistics")
             st.metric("Total Points", len(x))
-            st.metric("Max Depth", f"{abs(z.min()):.2f} mm")
-            st.metric("Path Type", selected_path.title())
+            st.metric("Total Layers", num_layers)
+            st.metric("Points per Layer", num_points_per_layer)
+            st.metric("Max Depth", f"{depth_input:.2f} mm")
+            st.metric("Base Radius", f"{base_radius:.1f} mm")
             
+            st.markdown("#### Layer Information")
+            st.write(f"**Step Down:** {step_down} mm")
+            st.write(f"**Path Type:** {best_path}")
+            st.write(f"**Geometry:** {geometry_input.title()}")
+            
+            # Download path
             path_df = pd.DataFrame({'X': x, 'Y': y, 'Z': z})
             csv = path_df.to_csv(index=False)
             st.download_button(
-                "📥 Download Path Data",
+                "📥 Download Complete Path",
                 csv,
-                f"{selected_path}_path.csv",
+                f"{geometry_input}_{best_path}_path.csv",
                 "text/csv",
                 use_container_width=True
             )
     
     with tab2:
-        st.subheader("Stress Comparison Across All Path Types")
+        st.subheader("Tool Path Comparison for Target Geometry")
         
-        if all_predictions is not None and show_comparison:
+        if show_comparison and all_predictions:
             comp_df = pd.DataFrame([
                 {"Path Type": k, "Predicted Stress (MPa)": v}
                 for k, v in all_predictions.items()
@@ -602,7 +541,7 @@ if generate:
                     comp_df,
                     x='Path Type',
                     y='Predicted Stress (MPa)',
-                    title='Stress Prediction by Path Type',
+                    title=f'Stress Prediction for {geometry_input.upper()} Geometry',
                     color='Predicted Stress (MPa)',
                     color_continuous_scale='RdYlGn_r'
                 )
@@ -611,73 +550,71 @@ if generate:
             
             with col2:
                 st.markdown("#### Ranking")
-                st.dataframe(comp_df[['Path Type', 'Predicted Stress (MPa)', 'Status']], hide_index=True)
+                st.dataframe(
+                    comp_df[['Path Type', 'Predicted Stress (MPa)', 'Status']],
+                    hide_index=True,
+                    use_container_width=True
+                )
+                
+                st.markdown("#### Recommendation")
+                st.info(f"""
+                For **{geometry_input}** geometry:
+                - Best path: **{best_path}**
+                - Lowest stress: **{best_stress:.2f} MPa**
+                - {len(comp_df)} paths evaluated
+                """)
         else:
-            st.info("💡 Enable 'Show All Path Comparisons' or select 'Auto' mode.")
+            st.info("💡 Enable 'Show Path Comparison' to see all options.")
     
     with tab3:
-        st.subheader("Detailed Performance Analysis")
+        st.subheader("Process Details & Specifications")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("#### Input Parameters")
-            params_df = pd.DataFrame({
-                "Parameter": ["Path Type", "Depth", "Radius", "Max Radius", "Side Length"],
-                "Value": [
-                    selected_path,
-                    f"{depth_input} mm",
-                    f"{param_radius} mm",
-                    f"{param_max_radius} mm",
-                    f"{param_side_length} mm"
-                ]
-            })
-            st.dataframe(params_df, hide_index=True)
-        
-        with col2:
-            st.markdown("#### Stress vs Depth Profile")
+            st.markdown("#### Target Geometry")
+            st.write(f"**Shape:** {geometry_input.title()}")
+            st.write(f"**Description:** {GEOMETRY_PATH_RECOMMENDATIONS[geometry_input]['description']}")
+            st.write(f"**Target Depth:** {depth_input} mm")
+            st.write(f"**Base Radius:** {base_radius} mm")
             
-            depth_points = np.linspace(0, depth_input, 20)
-            stress_points = [
-                predict_stress(selected_path, d, param_radius, param_max_radius, param_side_length)
-                for d in depth_points
-            ]
-            
-            fig = px.line(
-                x=depth_points,
-                y=stress_points,
-                labels={"x": "Depth (mm)", "y": "Predicted Stress (MPa)"}
-            )
-            fig.update_traces(line=dict(color='red', width=3))
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with tab4:
-        st.subheader("Technical Specifications")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("#### Process Parameters")
-            st.write(f"**Path Type:** {selected_path}")
-            st.write(f"**Forming Depth:** {depth_input} mm")
-            st.write(f"**Predicted Stress:** {predicted_stress:.2f} MPa")
+            st.markdown("#### Tool Path Details")
+            st.write(f"**Selected Path:** {best_path}")
+            st.write(f"**Total Layers:** {num_layers}")
+            st.write(f"**Layer Step:** {step_down} mm")
+            st.write(f"**Points/Layer:** {num_points_per_layer}")
             
         with col2:
-            st.markdown("#### ML Model Details")
+            st.markdown("#### Predicted Performance")
+            st.write(f"**Max Stress:** {best_stress:.2f} MPa")
+            st.write(f"**Safety Factor:** {safety_factor:.2f}")
+            st.write(f"**Tool Radius:** {param_radius} mm")
+            
+            st.markdown("#### ML Model Info")
             st.write(f"**Algorithm:** Ridge Regression")
-            st.write(f"**Training Samples:** {model_data['training_samples']}")
-            st.write(f"**R² Score:** {model_data['r2']:.3f}")
-            st.write(f"**RMSE:** {model_data['rmse']:.2f} MPa")
+            st.write(f"**Training Data:** {model_data['training_samples']} samples")
+            st.write(f"**Model R²:** {model_data['r2']:.3f}")
+            st.write(f"**Model RMSE:** {model_data['rmse']:.2f} MPa")
 
 else:
     st.info("""
-    ### 🚀 Getting Started
+    ### 🚀 How to Use
     
-    1. **Select a shape** from the sidebar (or choose 'Auto' for ML recommendation)
-    2. **Set the forming depth** using the slider
-    3. **Adjust advanced parameters** if needed
-    4. **Click 'Generate & Predict'** to see results
+    1. **Select Target Geometry** - Choose the shape you want to create (cone, pyramid, dome, etc.)
+    2. **Set Depth & Radius** - Define your target dimensions
+    3. **Adjust Process Parameters** - Set layer step-down and points per layer
+    4. **Generate Path** - Click the button to find the optimal tool path
+    
+    The system will analyze all suitable paths and recommend the best one based on predicted stress.
+    You'll see the complete multi-layer tool movement showing the actual forming operation.
     """)
+    
+    st.markdown("### 📐 Available Geometries")
+    cols = st.columns(3)
+    for idx, (geom, info) in enumerate(GEOMETRY_PATH_RECOMMENDATIONS.items()):
+        with cols[idx % 3]:
+            st.markdown(f"**{geom.replace('_', ' ').title()}**")
+            st.caption(info['description'])
 
 st.markdown("---")
-st.caption("🔬 Smart Incremental Forming with ML | Powered by Ridge Regression")
+st.caption("🔬 Smart Incremental Forming with ML | Multi-Layer Path Generation")
