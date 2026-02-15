@@ -35,8 +35,13 @@ def load_pretrained_model():
         with open(model_path, 'rb') as f:
             model_data = pickle.load(f)
         
+        # CRITICAL CHECK: Does pickle have time_model?
+        if 'time_model' not in model_data or model_data.get('time_model') is None:
+            st.warning(f"⚠️ Old pickle file detected (no time model). Retraining from CSV...")
+            return train_ml_model_from_csv()
+        
         model_type = type(model_data.get('model', None)).__name__
-        st.success(f"✅ Loaded pre-trained {model_type}: R² = {model_data['r2']:.3f}, MAE = {model_data.get('mae', 0):.2f} MPa")
+        st.success(f"✅ Loaded pre-trained {model_type} with time model: R² = {model_data['r2']:.3f}, MAE = {model_data.get('mae', 0):.2f} MPa")
         return model_data
         
     except FileNotFoundError:
@@ -44,13 +49,32 @@ def load_pretrained_model():
         return train_ml_model_from_csv()
     except Exception as e:
         st.error(f"❌ Error loading model: {e}")
+        st.warning("Training from CSV instead...")
         return train_ml_model_from_csv()
 
 @st.cache_resource
 def train_ml_model_from_csv():
     """Fallback: Train model from CSV if pkl file not available"""
     try:
-        csv_path = SCRIPT_DIR / 'simulation_results_FINAL_CORRECTED.csv'
+        # Try multiple CSV file names
+        possible_csv_files = [
+            'simulation_results_FINAL_CORRECTED.csv',
+            'simulation_results_progress_0675.csv',
+            'simulation_results_progress_0300.csv'
+        ]
+        
+        csv_path = None
+        for filename in possible_csv_files:
+            test_path = SCRIPT_DIR / filename
+            if test_path.exists():
+                csv_path = test_path
+                st.info(f"📂 Using CSV file: {filename}")
+                break
+        
+        if csv_path is None:
+            st.error(f"❌ No CSV file found! Looked for: {possible_csv_files}")
+            return None
+            
         df = pd.read_csv(csv_path)
         
         df = df[df['status'] == 'SUCCESS'].copy()
@@ -131,6 +155,7 @@ with st.spinner("Loading ML model..."):
     model_data = load_pretrained_model()
 
 if model_data is None:
+    st.error("❌ Failed to load or train model. Please check your CSV file.")
     st.stop()
 
 ml_model = model_data['model']
@@ -139,17 +164,11 @@ encoder = model_data['encoder']
 feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
 
-# Check if time model is available
-if time_model is None:
-    st.warning("⚠️ Time prediction model not found in pickle file. Time will be estimated as 60s for all paths.")
-    st.info("💡 To enable accurate time predictions, delete the pickle file and let the system retrain from CSV, OR upload a new pickle with both stress and time models.")
-    
-    # Show which file to delete
-    pkl_path = SCRIPT_DIR / 'model_all_datasets.pkl'
-    if pkl_path.exists():
-        st.code(f"Delete this file to retrain: {pkl_path}")
+# Show model status
+if time_model is not None:
+    st.success("✅ Both stress and time prediction models are active!")
 else:
-    st.success(f"✅ Both stress and time models loaded successfully!")
+    st.error("❌ Time model failed to load. This shouldn't happen - please check the CSV file has 'total_time' column.")
 
 def analyze_failure_patterns(df):
     """Analyze failed simulations to identify problematic parameter ranges"""
