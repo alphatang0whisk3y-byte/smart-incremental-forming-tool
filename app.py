@@ -139,6 +139,18 @@ encoder = model_data['encoder']
 feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
 
+# Check if time model is available
+if time_model is None:
+    st.warning("⚠️ Time prediction model not found in pickle file. Time will be estimated as 60s for all paths.")
+    st.info("💡 To enable accurate time predictions, delete the pickle file and let the system retrain from CSV, OR upload a new pickle with both stress and time models.")
+    
+    # Show which file to delete
+    pkl_path = SCRIPT_DIR / 'model_all_datasets.pkl'
+    if pkl_path.exists():
+        st.code(f"Delete this file to retrain: {pkl_path}")
+else:
+    st.success(f"✅ Both stress and time models loaded successfully!")
+
 def analyze_failure_patterns(df):
     """Analyze failed simulations to identify problematic parameter ranges"""
     failed = df[df['status'] != 'SUCCESS'].copy()
