@@ -406,6 +406,27 @@ def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_ra
 def calculate_num_layers(depth, step_down=0.5):
     return max(int(np.ceil(depth / step_down)), 3)
 
+def predict_stress_along_path(x, y, z, path_type, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
+    """
+    Predict stress at each point along the tool path based on local depth.
+    Returns array of stress predictions for each (x, y, z) point.
+    """
+    stress_values = []
+    
+    for i in range(len(z)):
+        # Current depth at this point (z is negative, so we take absolute value)
+        current_depth = abs(z[i])
+        
+        # Predict stress at this depth
+        try:
+            stress = predict_stress(path_type, current_depth, param_radius, param_max_radius, param_side_length, param_amplitude)
+            stress_values.append(stress)
+        except:
+            # If prediction fails, use the max predicted stress
+            stress_values.append(300.0)  # Default fallback
+    
+    return np.array(stress_values)
+
 def generate_complete_tool_path(path_type, geometry, depth, base_radius=50, num_points_per_layer=100):
     num_layers = calculate_num_layers(depth, step_down=0.5)
     
@@ -722,28 +743,62 @@ if generate:
             best_path, geometry_input, depth_input, base_radius, num_points_per_layer
         )
         
+        # Predict stress at each point along the path
+        stress_along_path = predict_stress_along_path(
+            x, y, z, best_path, param_radius, param_max_radius, base_radius, param_amplitude
+        )
+        
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            layer_colors = []
-            for i in range(len(z)):
-                layer_num = int(-z[i] / (depth_input / num_layers))
-                layer_colors.append(layer_num)
+            # Toggle for coloring mode
+            coloring_mode = st.radio(
+                "Color path by:",
+                ["Predicted Stress (ML)", "Layer Number"],
+                horizontal=True,
+                help="Stress coloring shows estimated stress at each point. Layer coloring shows depth progression."
+            )
+            
+            if coloring_mode == "Predicted Stress (ML)":
+                color_values = stress_along_path
+                colorbar_title = "Stress (MPa)"
+                colorscale = 'RdYlGn_r'  # Red (high stress) to Green (low stress)
+            else:
+                # Original layer-based coloring
+                layer_colors = []
+                for i in range(len(z)):
+                    layer_num = int(-z[i] / (depth_input / num_layers))
+                    layer_colors.append(layer_num)
+                color_values = layer_colors
+                colorbar_title = "Layer"
+                colorscale = 'Viridis'
             
             fig = go.Figure(data=[go.Scatter3d(
                 x=x, y=y, z=z,
                 mode='lines',
                 line=dict(
-                    color=layer_colors,
-                    colorscale='Viridis',
+                    color=color_values,
+                    colorscale=colorscale,
                     width=3,
-                    colorbar=dict(title="Layer")
+                    colorbar=dict(title=colorbar_title),
+                    cmin=stress_along_path.min() if coloring_mode == "Predicted Stress (ML)" else None,
+                    cmax=stress_along_path.max() if coloring_mode == "Predicted Stress (ML)" else None
                 ),
-                name='Tool Path'
+                name='Tool Path',
+                hovertemplate=(
+                    '<b>Position</b><br>' +
+                    'X: %{x:.2f} mm<br>' +
+                    'Y: %{y:.2f} mm<br>' +
+                    'Z: %{z:.2f} mm<br>' +
+                    '<b>Stress:</b> ' + 
+                    ['%{marker.color:.1f} MPa' if coloring_mode == "Predicted Stress (ML)" else 'Layer %{marker.color:.0f}'][0] +
+                    '<extra></extra>'
+                )
             )])
             
             fig.update_layout(
-                title=f"Complete {num_layers}-Layer Tool Path",
+                title=f"Complete {num_layers}-Layer Tool Path" + 
+                      (f" - Color: Stress Distribution" if coloring_mode == "Predicted Stress (ML)" else f" - Color: Layer Number"),
                 scene=dict(
                     xaxis_title="X (mm)",
                     yaxis_title="Y (mm)",
@@ -763,17 +818,30 @@ if generate:
             st.metric("Max Depth", f"{depth_input:.2f} mm")
             st.metric("Base Radius", f"{base_radius:.1f} mm")
             
+            st.markdown("#### Stress Prediction")
+            st.metric("Min Stress", f"{stress_along_path.min():.1f} MPa")
+            st.metric("Max Stress", f"{stress_along_path.max():.1f} MPa")
+            st.metric("Avg Stress", f"{stress_along_path.mean():.1f} MPa")
+            st.metric("Stress Range", f"{stress_along_path.max() - stress_along_path.min():.1f} MPa")
+            
             st.markdown("#### Layer Information")
             st.write(f"**Step Down:** {step_down} mm")
             st.write(f"**Path Type:** {best_path}")
             st.write(f"**Geometry:** {geometry_input.title()}")
             
-            path_df = pd.DataFrame({'X': x, 'Y': y, 'Z': z})
+            st.info("💡 **Tip:** Switch to 'Predicted Stress' coloring to see stress distribution along the tool path!")
+            
+            path_df = pd.DataFrame({
+                'X': x, 
+                'Y': y, 
+                'Z': z,
+                'Predicted_Stress_MPa': stress_along_path
+            })
             csv = path_df.to_csv(index=False)
             st.download_button(
-                "Download Complete Path",
+                "Download Complete Path + Stress",
                 csv,
-                f"{geometry_input}_{best_path}_path.csv",
+                f"{geometry_input}_{best_path}_path_with_stress.csv",
                 "text/csv",
                 use_container_width=True
             )
