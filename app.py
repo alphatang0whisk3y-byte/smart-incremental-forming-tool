@@ -743,19 +743,27 @@ if generate:
         st.subheader(f"Complete Tool Movement - {best_path.upper()} Path for {geometry_input.upper()}")
         st.markdown(f"**Showing all {num_layers} layers** with tool retractions between passes")
         
+        # Debug checkpoint
+        st.info("🔍 Generating tool path...")
+        
         try:
             x, y, z, layers = generate_complete_tool_path(
                 best_path, geometry_input, depth_input, base_radius, num_points_per_layer
             )
+            st.success(f"✓ Generated {len(x)} points")
             
             # Predict stress at each point along the path
+            st.info("🔍 Predicting stress along path...")
             stress_along_path = predict_stress_along_path(
                 x, y, z, best_path, param_radius, param_max_radius, base_radius, param_amplitude
             )
+            st.success(f"✓ Predicted stress: {stress_along_path.min():.1f} - {stress_along_path.max():.1f} MPa")
             
             col1, col2 = st.columns([2, 1])
             
             with col1:
+                st.info("🔍 Creating visualization...")
+                
                 # Toggle for coloring mode
                 coloring_mode = st.radio(
                     "Color path by:",
@@ -777,6 +785,8 @@ if generate:
                     color_values = layer_colors
                     colorbar_title = "Layer"
                     colorscale = 'Viridis'
+                
+                st.info(f"🔍 Creating 3D figure with {len(color_values)} color values...")
                 
                 fig = go.Figure(data=[go.Scatter3d(
                     x=x, y=y, z=z,
@@ -819,7 +829,13 @@ if generate:
                     ),
                     height=700
                 )
+                
+                st.success("✓ Figure created successfully!")
+                st.info("🔍 Rendering plot...")
+                
                 st.plotly_chart(fig, use_container_width=True)
+                
+                st.success("✓ Plot rendered!")
             
             with col2:
                 st.markdown("#### Path Statistics")
