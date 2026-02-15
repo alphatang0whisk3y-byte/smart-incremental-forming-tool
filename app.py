@@ -408,26 +408,82 @@ def calculate_num_layers(depth, step_down=0.5):
 
 def predict_stress_along_path(x, y, z, path_type, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
     """
-    Predict stress at each point along the tool path based on local depth.
+    Predict stress at each point along the tool path considering:
+    - Local depth (primary factor)
+    - Radial position from center
+    - Local curvature (path sharpness)
+    - Distance along path (work hardening effect)
+    
     Returns array of stress predictions for each (x, y, z) point.
     """
     stress_values = []
+    n_points = len(z)
     
-    for i in range(len(z)):
-        # Current depth at this point (z is negative, so we take absolute value)
+    # Calculate radial distance from center for each point
+    radial_dist = np.sqrt(x**2 + y**2)
+    
+    # Calculate path curvature (higher at corners/sharp turns)
+    curvature = np.zeros(n_points)
+    for i in range(1, n_points - 1):
+        # Simple curvature approximation using change in direction
+        dx1, dy1 = x[i] - x[i-1], y[i] - y[i-1]
+        dx2, dy2 = x[i+1] - x[i], y[i+1] - y[i]
+        
+        # Normalize vectors
+        len1 = np.sqrt(dx1**2 + dy1**2) + 1e-6
+        len2 = np.sqrt(dx2**2 + dy2**2) + 1e-6
+        
+        # Angle change (curvature indicator)
+        cos_angle = (dx1*dx2 + dy1*dy2) / (len1 * len2)
+        cos_angle = np.clip(cos_angle, -1, 1)
+        curvature[i] = 1 - cos_angle  # 0 = straight, 2 = sharp turn
+    
+    # Smooth curvature to avoid noise
+    if n_points > 5:
+        window = min(5, n_points // 10)
+        curvature = np.convolve(curvature, np.ones(window)/window, mode='same')
+    
+    for i in range(n_points):
+        # Current depth at this point (primary factor)
         current_depth = abs(z[i])
         
         # Avoid zero or very small depths
         if current_depth < 0.1:
             current_depth = 0.1
         
-        # Predict stress at this depth
+        # Base stress prediction from ML model
         try:
-            stress = predict_stress(path_type, current_depth, param_radius, param_max_radius, param_side_length, param_amplitude)
-            stress_values.append(float(stress))
+            base_stress = predict_stress(path_type, current_depth, param_radius, param_max_radius, param_side_length, param_amplitude)
         except Exception as e:
-            # If prediction fails, use a reasonable default
-            stress_values.append(285.0)  # Use mean stress from training data
+            base_stress = 285.0  # Fallback
+        
+        # Apply modifying factors
+        
+        # 1. Radial position factor: higher stress at larger radii (more material stretch)
+        max_radius = max(radial_dist) if max(radial_dist) > 0 else 1.0
+        radial_factor = 1.0 + 0.15 * (radial_dist[i] / max_radius)
+        
+        # 2. Curvature factor: higher stress at sharp corners/turns
+        curvature_factor = 1.0 + 0.20 * curvature[i]
+        
+        # 3. Work hardening factor: stress increases slightly along path
+        progress_factor = 1.0 + 0.10 * (i / n_points)
+        
+        # 4. Path type specific adjustments
+        if path_type in ['square', 'hexagon', 'star']:
+            # Polygonal paths have stress concentrations at corners
+            curvature_factor *= 1.2
+        elif path_type in ['spiral', 'spiral_inward']:
+            # Spiral paths have gradual stress increase
+            progress_factor *= 1.15
+        
+        # Combine all factors
+        final_stress = base_stress * radial_factor * curvature_factor * progress_factor
+        
+        # Clamp to reasonable range (avoid extreme values)
+        final_stress = np.clip(final_stress, base_stress * 0.7, base_stress * 1.5)
+        
+        stress_values.append(float(final_stress))
     
     return np.array(stress_values)
 
@@ -765,12 +821,21 @@ if generate:
                 st.info("🔍 Creating visualization...")
                 
                 # Toggle for coloring mode
-                coloring_mode = st.radio(
-                    "Color path by:",
-                    ["Predicted Stress (ML)", "Layer Number"],
-                    horizontal=True,
-                    help="Stress coloring shows estimated stress at each point. Layer coloring shows depth progression."
-                )
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    coloring_mode = st.radio(
+                        "Color path by:",
+                        ["Predicted Stress (ML)", "Layer Number"],
+                        help="Stress coloring shows estimated stress at each point. Layer coloring shows depth progression."
+                    )
+                
+                with col_b:
+                    if coloring_mode == "Predicted Stress (ML)":
+                        st.caption("**Stress factors considered:**")
+                        st.caption("• Depth (primary)")
+                        st.caption("• Radial position")
+                        st.caption("• Path curvature")
+                        st.caption("• Work hardening")
                 
                 if coloring_mode == "Predicted Stress (ML)":
                     color_values = stress_along_path
@@ -845,18 +910,35 @@ if generate:
                 st.metric("Max Depth", f"{depth_input:.2f} mm")
                 st.metric("Base Radius", f"{base_radius:.1f} mm")
                 
-                st.markdown("#### Stress Prediction")
-                st.metric("Min Stress", f"{stress_along_path.min():.1f} MPa")
-                st.metric("Max Stress", f"{stress_along_path.max():.1f} MPa")
-                st.metric("Avg Stress", f"{stress_along_path.mean():.1f} MPa")
-                st.metric("Stress Range", f"{stress_along_path.max() - stress_along_path.min():.1f} MPa")
+                st.markdown("#### Stress Distribution")
+                st.metric("Min Stress", f"{stress_along_path.min():.1f} MPa", 
+                         help="Lowest stress point (typically at shallow depths)")
+                st.metric("Max Stress", f"{stress_along_path.max():.1f} MPa",
+                         help="Highest stress point (typically at sharp corners or max depth)")
+                st.metric("Avg Stress", f"{stress_along_path.mean():.1f} MPa",
+                         help="Average stress across entire path")
+                st.metric("Std Dev", f"{stress_along_path.std():.1f} MPa",
+                         help="Stress variation - higher means more uneven distribution")
+                
+                # Show stress distribution histogram
+                with st.expander("📊 View Stress Histogram"):
+                    import plotly.express as px
+                    stress_df = pd.DataFrame({'Stress (MPa)': stress_along_path})
+                    fig_hist = px.histogram(
+                        stress_df, 
+                        x='Stress (MPa)', 
+                        nbins=30,
+                        title="Stress Distribution Along Path"
+                    )
+                    fig_hist.update_layout(height=250)
+                    st.plotly_chart(fig_hist, use_container_width=True)
                 
                 st.markdown("#### Layer Information")
                 st.write(f"**Step Down:** {step_down} mm")
                 st.write(f"**Path Type:** {best_path}")
                 st.write(f"**Geometry:** {geometry_input.title()}")
                 
-                st.info("💡 **Tip:** Switch to 'Predicted Stress' coloring to see stress distribution along the tool path!")
+                st.info("💡 **Tip:** Stress is higher at:\n- Greater depths\n- Sharp corners\n- Larger radii\n- Later in the path (work hardening)")
                 
                 path_df = pd.DataFrame({
                     'X': x, 
@@ -866,11 +948,12 @@ if generate:
                 })
                 csv = path_df.to_csv(index=False)
                 st.download_button(
-                    "Download Complete Path + Stress",
+                    "Download Path + Stress Data",
                     csv,
                     f"{geometry_input}_{best_path}_path_with_stress.csv",
                     "text/csv",
-                    use_container_width=True
+                    use_container_width=True,
+                    help="Download complete tool path with stress predictions at each point"
                 )
         
         except Exception as e:
