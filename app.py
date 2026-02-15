@@ -27,17 +27,10 @@ def load_pretrained_model():
     model_path = SCRIPT_DIR / 'model_all_datasets.pkl'
     csv_path = SCRIPT_DIR / 'simulation_results_FINAL_CORRECTED.csv'
     
-    # Show debug info
-    st.sidebar.write("**Debug Info:**")
-    st.sidebar.write(f"Script Dir: `{SCRIPT_DIR}`")
-    st.sidebar.write(f"PKL exists: {model_path.exists()}")
-    st.sidebar.write(f"CSV exists: {csv_path.exists()}")
-    
     try:
         # Use absolute path
         if not model_path.exists():
-            st.warning(f"⚠️ Pickle file not found at: {model_path}")
-            st.warning("📊 Falling back to CSV training...")
+            st.warning(f"⚠️ Pickle file not found. Training from CSV...")
             return train_ml_model_from_csv()
             
         with open(model_path, 'rb') as f:
@@ -45,8 +38,6 @@ def load_pretrained_model():
         
         # Check what model type it is
         model_type = type(model_data.get('model', None)).__name__
-        st.sidebar.success(f"✅ Loaded from PKL")
-        st.sidebar.write(f"Model Type: **{model_type}**")
         
         st.success(f"✅ Loaded pre-trained {model_type}: R² = {model_data['r2']:.3f}, MAE = {model_data.get('mae', 0):.2f} MPa")
         return model_data
@@ -70,23 +61,15 @@ def train_ml_model_from_csv():
         
         # Show data statistics BEFORE filtering
         total_rows = len(df)
-        st.info(f"📊 Total rows in CSV: {total_rows}")
         
         # Analyze failure patterns
         failure_analysis = analyze_failure_patterns(df)
         
         df = df[df['status'] == 'SUCCESS'].copy()
         successful_rows = len(df)
-        st.info(f"✅ Successful simulations: {successful_rows} ({successful_rows/total_rows*100:.1f}%)")
-        st.warning(f"❌ Failed/Other simulations: {total_rows - successful_rows} ({(total_rows - successful_rows)/total_rows*100:.1f}%)")
         
         df = df.dropna(subset=['max_stress_MPa'])
         final_rows = len(df)
-        
-        if final_rows < successful_rows:
-            st.warning(f"⚠️ Rows with missing stress data: {successful_rows - final_rows}")
-        
-        st.success(f"🎯 Final training samples: {final_rows}")
         
         if len(df) == 0:
             st.error("No successful simulations found in CSV!")
@@ -143,9 +126,6 @@ def train_ml_model_from_csv():
         
     except Exception as e:
         st.error(f"Error training model: {e}")
-        st.error(f"Looking for CSV at: {SCRIPT_DIR / 'simulation_results_FINAL_CORRECTED.csv'}")
-        st.error(f"Current directory: {SCRIPT_DIR}")
-        st.error(f"Files in directory: {list(SCRIPT_DIR.glob('*'))}")
         return None
 
 with st.spinner("Loading ML model..."):
@@ -158,12 +138,6 @@ ml_model = model_data['model']
 encoder = model_data['encoder']
 feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
-
-# Show expected features in sidebar for debugging
-with st.sidebar.expander("🔍 Model Features"):
-    st.write("**Expected Features:**")
-    for i, feat in enumerate(feature_cols, 1):
-        st.write(f"{i}. {feat}")
 
 def analyze_failure_patterns(df):
     """Analyze failed simulations to identify problematic parameter ranges"""
@@ -625,7 +599,7 @@ num_points_per_layer = st.sidebar.slider("Points per Layer", 50, 200, 100, 10)
 param_radius = 10.0
 param_max_radius = 15.0
 param_side_length = 12.0
-param_amplitude = 5.0  # Default amplitude value
+param_amplitude = 5.0
 
 st.sidebar.header("Visualization")
 show_comparison = st.sidebar.checkbox("Show Path Comparison", value=True)
@@ -660,37 +634,14 @@ st.sidebar.subheader("Model Information")
 model_type = type(ml_model).__name__
 model_info_text = f"""
 **Model Type:** {model_type}  
-**Training Samples:** {model_data['training_samples']} (successful only)  
-**R² Score:** {model_data['r2']:.3f} (0=poor, 1=perfect)  
-**RMSE:** {model_data['rmse']:.2f} MPa (avg error)  
+**Training Samples:** {model_data['training_samples']}  
+**R² Score:** {model_data['r2']:.3f}  
+**RMSE:** {model_data['rmse']:.2f} MPa  
 **MAE:** {model_data.get('mae', 0):.2f} MPa
 
-**Note:** Only successful simulations with valid stress values are used for training.
+**Note:** Predictions based on successful simulations only.
 """
 st.sidebar.info(model_info_text)
-
-# Add expandable explanation
-with st.sidebar.expander("ℹ️ Understanding the Metrics"):
-    st.write("""
-    **Why only 197 samples?**
-    - Total simulations: 675
-    - Successful: ~197 (29%)
-    - Failed/Invalid: ~478 (71%)
-    - Only successful ones are used
-    
-    **RMSE (Root Mean Squared Error):**
-    - Units: MPa (same as stress)
-    - Average prediction error
-    - 13.76 MPa error is typical
-    - Lower is better
-    
-    **R² Score (0.702):**
-    - Measures model fit quality
-    - Range: 0 to 1
-    - 0.7 = Good predictive power
-    - 0.8+ = Very good
-    - 1.0 = Perfect predictions
-    """)
 
 if generate:
     # Validate parameters first
@@ -799,43 +750,26 @@ if generate:
         st.subheader(f"Complete Tool Movement - {best_path.upper()} Path for {geometry_input.upper()}")
         st.markdown(f"**Showing all {num_layers} layers** with tool retractions between passes")
         
-        # Debug checkpoint
-        st.info("🔍 Generating tool path...")
-        
         try:
             x, y, z, layers = generate_complete_tool_path(
                 best_path, geometry_input, depth_input, base_radius, num_points_per_layer
             )
-            st.success(f"✓ Generated {len(x)} points")
             
             # Predict stress at each point along the path
-            st.info("🔍 Predicting stress along path...")
             stress_along_path = predict_stress_along_path(
                 x, y, z, best_path, param_radius, param_max_radius, base_radius, param_amplitude
             )
-            st.success(f"✓ Predicted stress: {stress_along_path.min():.1f} - {stress_along_path.max():.1f} MPa")
             
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                st.info("🔍 Creating visualization...")
-                
                 # Toggle for coloring mode
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    coloring_mode = st.radio(
-                        "Color path by:",
-                        ["Predicted Stress (ML)", "Layer Number"],
-                        help="Stress coloring shows estimated stress at each point. Layer coloring shows depth progression."
-                    )
-                
-                with col_b:
-                    if coloring_mode == "Predicted Stress (ML)":
-                        st.caption("**Stress factors considered:**")
-                        st.caption("• Depth (primary)")
-                        st.caption("• Radial position")
-                        st.caption("• Path curvature")
-                        st.caption("• Work hardening")
+                coloring_mode = st.radio(
+                    "Color path by:",
+                    ["Predicted Stress (ML)", "Layer Number"],
+                    horizontal=True,
+                    help="Stress coloring shows estimated stress at each point. Layer coloring shows depth progression."
+                )
                 
                 if coloring_mode == "Predicted Stress (ML)":
                     color_values = stress_along_path
@@ -850,8 +784,6 @@ if generate:
                     color_values = layer_colors
                     colorbar_title = "Layer"
                     colorscale = 'Viridis'
-                
-                st.info(f"🔍 Creating 3D figure with {len(color_values)} color values...")
                 
                 fig = go.Figure(data=[go.Scatter3d(
                     x=x, y=y, z=z,
@@ -895,12 +827,7 @@ if generate:
                     height=700
                 )
                 
-                st.success("✓ Figure created successfully!")
-                st.info("🔍 Rendering plot...")
-                
                 st.plotly_chart(fig, use_container_width=True)
-                
-                st.success("✓ Plot rendered!")
             
             with col2:
                 st.markdown("#### Path Statistics")
@@ -911,34 +838,15 @@ if generate:
                 st.metric("Base Radius", f"{base_radius:.1f} mm")
                 
                 st.markdown("#### Stress Distribution")
-                st.metric("Min Stress", f"{stress_along_path.min():.1f} MPa", 
-                         help="Lowest stress point (typically at shallow depths)")
-                st.metric("Max Stress", f"{stress_along_path.max():.1f} MPa",
-                         help="Highest stress point (typically at sharp corners or max depth)")
-                st.metric("Avg Stress", f"{stress_along_path.mean():.1f} MPa",
-                         help="Average stress across entire path")
-                st.metric("Std Dev", f"{stress_along_path.std():.1f} MPa",
-                         help="Stress variation - higher means more uneven distribution")
-                
-                # Show stress distribution histogram
-                with st.expander("📊 View Stress Histogram"):
-                    import plotly.express as px
-                    stress_df = pd.DataFrame({'Stress (MPa)': stress_along_path})
-                    fig_hist = px.histogram(
-                        stress_df, 
-                        x='Stress (MPa)', 
-                        nbins=30,
-                        title="Stress Distribution Along Path"
-                    )
-                    fig_hist.update_layout(height=250)
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                st.metric("Min Stress", f"{stress_along_path.min():.1f} MPa")
+                st.metric("Max Stress", f"{stress_along_path.max():.1f} MPa")
+                st.metric("Avg Stress", f"{stress_along_path.mean():.1f} MPa")
+                st.metric("Std Dev", f"{stress_along_path.std():.1f} MPa")
                 
                 st.markdown("#### Layer Information")
                 st.write(f"**Step Down:** {step_down} mm")
                 st.write(f"**Path Type:** {best_path}")
                 st.write(f"**Geometry:** {geometry_input.title()}")
-                
-                st.info("💡 **Tip:** Stress is higher at:\n- Greater depths\n- Sharp corners\n- Larger radii\n- Later in the path (work hardening)")
                 
                 path_df = pd.DataFrame({
                     'X': x, 
@@ -952,13 +860,11 @@ if generate:
                     csv,
                     f"{geometry_input}_{best_path}_path_with_stress.csv",
                     "text/csv",
-                    use_container_width=True,
-                    help="Download complete tool path with stress predictions at each point"
+                    use_container_width=True
                 )
         
         except Exception as e:
             st.error(f"Error generating visualization: {e}")
-            st.error("Please check your parameters and try again.")
             import traceback
             st.code(traceback.format_exc())
     
@@ -1020,7 +926,7 @@ if generate:
                 st.metric("Predicted Stress", f"{best_stress:.2f} MPa")
                 st.metric("Target Depth", f"{depth_input:.2f} mm")
                 st.metric("Base Radius", f"{base_radius:.1f} mm")
-                st.info("Based on trained Ridge regression model")
+                st.info("Based on trained Random Forest model")
             
             with col2:
                 st.markdown("### FEM Simulation")
