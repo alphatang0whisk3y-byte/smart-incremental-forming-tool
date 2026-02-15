@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pickle
 from sklearn.preprocessing import LabelEncoder
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
@@ -15,9 +16,33 @@ st.set_page_config(
 )
 
 @st.cache_resource
-def train_ml_model_from_csv():
+def load_pretrained_model():
+    """Load the pre-trained model from pickle file"""
     try:
-        df = pd.read_csv('simulation_results_progress_0300.csv')
+        # Try loading pre-trained model first
+        with open('model_675_only.pkl', 'rb') as f:
+            model_data = pickle.load(f)
+        
+        st.success(f"Loaded pre-trained model: R² = {model_data['r2']:.3f}, MAE = {model_data['mae']:.2f} MPa")
+        return model_data
+        
+    except FileNotFoundError:
+        # Fallback: Train from CSV if pkl not found
+        st.warning("Pre-trained model not found. Training from CSV...")
+        return train_ml_model_from_csv()
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        return None
+
+@st.cache_resource
+def train_ml_model_from_csv():
+    """Fallback: Train model from CSV if pkl file not available"""
+    try:
+        df = pd.read_csv('simulation_results_progress_0675.csv')
+        
+        # Analyze failure patterns
+        failure_analysis = analyze_failure_patterns(df)
+        
         df = df[df['status'] == 'SUCCESS'].copy()
         df = df.dropna(subset=['max_stress_MPa'])
         
@@ -69,8 +94,8 @@ def train_ml_model_from_csv():
         st.error(f"Error training model: {e}")
         return None
 
-with st.spinner("Training ML model from data..."):
-    model_data = train_ml_model_from_csv()
+with st.spinner("Loading ML model..."):
+    model_data = load_pretrained_model()
 
 if model_data is None:
     st.stop()
@@ -79,6 +104,71 @@ ml_model = model_data['model']
 encoder = model_data['encoder']
 feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
+
+def analyze_failure_patterns(df):
+    """Analyze failed simulations to identify problematic parameter ranges"""
+    failed = df[df['status'] != 'SUCCESS'].copy()
+    
+    if len(failed) == 0:
+        return None
+    
+    analysis = {
+        'total_failures': len(failed),
+        'failure_by_path': failed['path_type'].value_counts().to_dict(),
+        'depth_failures': failed['depth_input_mm'].describe().to_dict(),
+        'common_issues': []
+    }
+    
+    # Identify common failure patterns
+    if len(failed) > 0:
+        # High depth failures
+        high_depth_fails = failed[failed['depth_input_mm'] > 6.0]
+        if len(high_depth_fails) > 0:
+            analysis['common_issues'].append(f"High failure rate for depth > 6mm ({len(high_depth_fails)} cases)")
+        
+        # Small radius failures
+        failed_with_radius = failed.dropna(subset=['param_radius'])
+        if len(failed_with_radius) > 0:
+            small_radius_fails = failed_with_radius[failed_with_radius['param_radius'] < 6]
+            if len(small_radius_fails) > 0:
+                analysis['common_issues'].append(f"High failure rate for radius < 6mm ({len(small_radius_fails)} cases)")
+    
+    return analysis
+
+def validate_parameters(geometry, depth, base_radius, path_type):
+    """
+    Validate user parameters against known failure patterns
+    Returns: (is_valid, warning_messages)
+    """
+    warnings = []
+    
+    # Depth validation
+    if depth > 7.0:
+        warnings.append("WARNING: Depth > 7mm has high failure rate in simulations")
+    elif depth > 6.0:
+        warnings.append("CAUTION: Depth > 6mm may be unstable for some path types")
+    
+    # Radius validation
+    if base_radius < 25:
+        warnings.append("WARNING: Small base radius (< 25mm) increases failure risk")
+    
+    # Path-specific validations
+    if path_type in ['spiral', 'spiral_inward'] and depth > 6.5:
+        warnings.append("WARNING: Spiral paths often fail with depth > 6.5mm")
+    
+    if path_type == 'figure8' and depth > 5.0:
+        warnings.append("CAUTION: Figure-8 path has limited success at depths > 5mm")
+    
+    # Geometry-specific validations
+    if geometry == 'cone' and depth > 6.0 and base_radius < 30:
+        warnings.append("WARNING: Steep cone geometry (high depth, small radius) prone to failure")
+    
+    if geometry == 'pyramid' and base_radius < 25:
+        warnings.append("CAUTION: Small pyramid base may cause convergence issues")
+    
+    is_valid = len([w for w in warnings if w.startswith('WARNING')]) == 0
+    
+    return is_valid, warnings
 
 GEOMETRY_PATH_RECOMMENDATIONS = {
     'cone': {
@@ -415,9 +505,47 @@ st.sidebar.info(f"""
 **Training Samples:** {model_data['training_samples']}  
 **R² Score:** {model_data['r2']:.3f}  
 **RMSE:** {model_data['rmse']:.2f} MPa
+
+**Note:** Predictions based on successful simulations only.
 """)
 
 if generate:
+    # Validate parameters first
+    temp_best_path, _, _ = find_best_path_for_geometry(
+        geometry_input, depth_input, param_radius, param_max_radius, base_radius
+    )
+    
+    is_valid, warnings = validate_parameters(geometry_input, depth_input, base_radius, temp_best_path if temp_best_path else 'circular')
+    
+    # Show validation warnings if any
+    if warnings:
+        st.warning("### Parameter Validation Warnings")
+        for warning in warnings:
+            if warning.startswith('WARNING'):
+                st.error(warning)
+            else:
+                st.warning(warning)
+        
+        if not is_valid:
+            st.error("""
+            **High Risk Configuration Detected!**
+            
+            These parameters have shown high failure rates in FEM simulations.
+            Consider adjusting depth or radius before proceeding.
+            
+            You can continue, but simulation may fail or produce unreliable results.
+            """)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Adjust Parameters", type="primary"):
+                    st.info("Please adjust the parameters in the sidebar")
+                    st.stop()
+            with col2:
+                proceed = st.button("Continue Anyway", type="secondary")
+                if not proceed:
+                    st.stop()
+    
     st.markdown(f"""
     <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:1.5rem;border-radius:15px;color:white;font-size:1.1rem;text-align:center;margin:1rem 0;">
         TARGET GEOMETRY: <strong>{geometry_input.upper().replace('_', ' ')}</strong><br>
