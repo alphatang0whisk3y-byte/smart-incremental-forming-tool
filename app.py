@@ -24,7 +24,7 @@ SCRIPT_DIR = Path(__file__).parent.absolute() if '__file__' in globals() else Pa
 @st.cache_resource
 def load_pretrained_model():
     """Load the pre-trained model from pickle file"""
-    model_path = SCRIPT_DIR / 'model_675_only.pkl'
+    model_path = SCRIPT_DIR / 'model_all_datasets.pkl'
     csv_path = SCRIPT_DIR / 'simulation_results_progress_0675.csv'
     
     # Show debug info
