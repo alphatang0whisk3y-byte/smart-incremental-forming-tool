@@ -7,6 +7,7 @@ import pickle
 import os
 from pathlib import Path
 from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -23,22 +24,41 @@ SCRIPT_DIR = Path(__file__).parent.absolute() if '__file__' in globals() else Pa
 @st.cache_resource
 def load_pretrained_model():
     """Load the pre-trained model from pickle file"""
+    model_path = SCRIPT_DIR / 'model_675_only.pkl'
+    csv_path = SCRIPT_DIR / 'simulation_results_progress_0675.csv'
+    
+    # Show debug info
+    st.sidebar.write("**Debug Info:**")
+    st.sidebar.write(f"Script Dir: `{SCRIPT_DIR}`")
+    st.sidebar.write(f"PKL exists: {model_path.exists()}")
+    st.sidebar.write(f"CSV exists: {csv_path.exists()}")
+    
     try:
         # Use absolute path
-        model_path = SCRIPT_DIR / 'model_675_only.pkl'
+        if not model_path.exists():
+            st.warning(f"⚠️ Pickle file not found at: {model_path}")
+            st.warning("📊 Falling back to CSV training...")
+            return train_ml_model_from_csv()
+            
         with open(model_path, 'rb') as f:
             model_data = pickle.load(f)
         
-        st.success(f"Loaded pre-trained model: R² = {model_data['r2']:.3f}, MAE = {model_data['mae']:.2f} MPa")
+        # Check what model type it is
+        model_type = type(model_data.get('model', None)).__name__
+        st.sidebar.success(f"✅ Loaded from PKL")
+        st.sidebar.write(f"Model Type: **{model_type}**")
+        
+        st.success(f"✅ Loaded pre-trained {model_type}: R² = {model_data['r2']:.3f}, MAE = {model_data.get('mae', 0):.2f} MPa")
         return model_data
         
     except FileNotFoundError:
         # Fallback: Train from CSV if pkl not found
-        st.warning("Pre-trained model not found. Training from CSV...")
+        st.warning("⚠️ Pre-trained model not found. Training from CSV...")
         return train_ml_model_from_csv()
     except Exception as e:
-        st.error(f"Error loading model: {e}")
-        return None
+        st.error(f"❌ Error loading model: {e}")
+        st.error(f"Attempting to train from CSV instead...")
+        return train_ml_model_from_csv()
 
 @st.cache_resource
 def train_ml_model_from_csv():
@@ -77,7 +97,8 @@ def train_ml_model_from_csv():
         
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         
-        model = Ridge(alpha=1.0)
+        # Use Random Forest instead of Ridge
+        model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
         model.fit(X_train, y_train)
         
         y_pred = model.predict(X_test)
@@ -324,16 +345,22 @@ def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_ra
     recommended_paths = GEOMETRY_PATH_RECOMMENDATIONS[geometry]['recommended_paths']
     
     predictions = {}
+    errors = {}
     for path in recommended_paths:
         try:
             stress = predict_stress(path, depth, param_radius, param_max_radius, param_side_length)
             predictions[path] = stress
-        except:
+        except Exception as e:
             predictions[path] = None
+            errors[path] = str(e)
     
     valid_predictions = {k: v for k, v in predictions.items() if v is not None}
     
     if not valid_predictions:
+        st.error("No valid predictions generated!")
+        st.error("Errors encountered:")
+        for path, error in errors.items():
+            st.error(f"- {path}: {error}")
         return None, None, {}
     
     best_path = min(valid_predictions, key=valid_predictions.get)
@@ -511,14 +538,18 @@ generate = st.sidebar.button("Generate Optimal Path", type="primary", use_contai
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Model Information")
-st.sidebar.info(f"""
-**Model Type:** Ridge Regression  
+
+# Determine model type
+model_type = type(ml_model).__name__
+model_info_text = f"""
+**Model Type:** {model_type}  
 **Training Samples:** {model_data['training_samples']}  
 **R² Score:** {model_data['r2']:.3f}  
 **RMSE:** {model_data['rmse']:.2f} MPa
 
 **Note:** Predictions based on successful simulations only.
-""")
+"""
+st.sidebar.info(model_info_text)
 
 if generate:
     # Validate parameters first
@@ -880,7 +911,7 @@ Generated: {pd.Timestamp.now()}
             st.write(f"**Safety Factor:** {safety_factor:.2f}")
             
             st.markdown("#### ML Model Info")
-            st.write(f"**Algorithm:** Ridge Regression")
+            st.write(f"**Algorithm:** {type(ml_model).__name__}")
             st.write(f"**Training Data:** {model_data['training_samples']} samples")
             st.write(f"**Model R-squared:** {model_data['r2']:.3f}")
             st.write(f"**Model RMSE:** {model_data['rmse']:.2f} MPa")
