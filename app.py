@@ -3,11 +3,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import pickle
-import os
-from pathlib import Path
 from sklearn.preprocessing import LabelEncoder
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -18,82 +14,22 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Get the directory where this script is located
-SCRIPT_DIR = Path(__file__).parent.absolute() if '__file__' in globals() else Path.cwd()
-
 @st.cache_resource
-def load_pretrained_model():
-    """Load the pre-trained model from pickle file"""
-    model_path = SCRIPT_DIR / 'model_all_datasets.pkl'
-    csv_path = SCRIPT_DIR / 'simulation_results_FINAL_CORRECTED.csv'
-    
+def train_ml_models_from_csv():
+    """Train both stress and time prediction models"""
     try:
-        if not model_path.exists():
-            st.warning(f"⚠️ Pickle file not found. Training from CSV...")
-            return train_ml_model_from_csv()
-            
-        with open(model_path, 'rb') as f:
-            model_data = pickle.load(f)
-        
-        # CRITICAL CHECK: Does pickle have time_model?
-        if 'time_model' not in model_data or model_data.get('time_model') is None:
-            st.warning(f"⚠️ Old pickle file detected (no time model). Retraining from CSV...")
-            return train_ml_model_from_csv()
-        
-        model_type = type(model_data.get('model', None)).__name__
-        st.success(f"✅ Loaded pre-trained {model_type} with time model: R² = {model_data['r2']:.3f}, MAE = {model_data.get('mae', 0):.2f} MPa")
-        return model_data
-        
-    except FileNotFoundError:
-        st.warning("⚠️ Pre-trained model not found. Training from CSV...")
-        return train_ml_model_from_csv()
-    except Exception as e:
-        st.error(f"❌ Error loading model: {e}")
-        st.warning("Training from CSV instead...")
-        return train_ml_model_from_csv()
-
-@st.cache_resource
-def train_ml_model_from_csv():
-    """Fallback: Train model from CSV if pkl file not available"""
-    try:
-        # Try multiple CSV file names
-        possible_csv_files = [
-            'simulation_results_FINAL_CORRECTED.csv',
-            'simulation_results_progress_0675.csv',
-            'simulation_results_progress_0300.csv'
-        ]
-        
-        csv_path = None
-        for filename in possible_csv_files:
-            test_path = SCRIPT_DIR / filename
-            if test_path.exists():
-                csv_path = test_path
-                st.info(f"📂 Using CSV file: {filename}")
-                break
-        
-        if csv_path is None:
-            st.error(f"❌ No CSV file found! Looked for: {possible_csv_files}")
-            return None
-            
-        df = pd.read_csv(csv_path)
-        
+        df = pd.read_csv('simulation_results_FINAL_CORRECTED.csv')
         df = df[df['status'] == 'SUCCESS'].copy()
-        df = df.dropna(subset=['max_stress_MPa'])
-        
-        if len(df) == 0:
-            st.error("No successful simulations found in CSV!")
-            return None
+        df = df.dropna(subset=['max_stress_MPa', 'total_time'])
         
         df['depth'] = df['depth_input_mm']
         df['param_radius_filled'] = df['param_radius'].fillna(10.0)
         df['param_max_radius_filled'] = df['param_max_radius'].fillna(df['param_radius_filled'] * 1.5)
         df['param_side_length_filled'] = df['param_side_length'].fillna(12.0)
-        df['param_amplitude_filled'] = df['param_amplitude'].fillna(5.0) if 'param_amplitude' in df.columns else 5.0
         
         df['depth_squared'] = df['depth'] ** 2
         df['radius_squared'] = df['param_radius_filled'] ** 2
         df['max_radius_squared'] = df['param_max_radius_filled'] ** 2
-        df['amplitude_squared'] = df['param_amplitude_filled'] ** 2 if isinstance(df['param_amplitude_filled'], pd.Series) else 5.0 ** 2
         
         encoder = LabelEncoder()
         df['path_encoded'] = encoder.fit_transform(df['path_type'])
@@ -101,129 +37,71 @@ def train_ml_model_from_csv():
         feature_cols = [
             'depth', 'path_encoded', 'param_radius_filled', 
             'param_max_radius_filled', 'param_side_length_filled',
-            'param_amplitude_filled',
-            'depth_squared', 'radius_squared', 'max_radius_squared',
-            'amplitude_squared'
+            'depth_squared', 'radius_squared', 'max_radius_squared'
         ]
         
         X = df[feature_cols]
-        y_stress = df['max_stress_MPa']
-        y_time = df['total_time']
-        
-        X_train, X_test, y_stress_train, y_stress_test, y_time_train, y_time_test = train_test_split(
-            X, y_stress, y_time, test_size=0.2, random_state=42
-        )
         
         # Train stress model
-        stress_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        stress_model.fit(X_train, y_stress_train)
+        y_stress = df['max_stress_MPa']
+        X_train_stress, X_test_stress, y_train_stress, y_test_stress = train_test_split(
+            X, y_stress, test_size=0.2, random_state=42
+        )
         
-        y_stress_pred = stress_model.predict(X_test)
-        mae_stress = mean_absolute_error(y_stress_test, y_stress_pred)
-        rmse_stress = np.sqrt(mean_squared_error(y_stress_test, y_stress_pred))
-        r2_stress = r2_score(y_stress_test, y_stress_pred)
+        stress_model = Ridge(alpha=1.0)
+        stress_model.fit(X_train_stress, y_train_stress)
+        
+        y_pred_stress = stress_model.predict(X_test_stress)
+        stress_mae = mean_absolute_error(y_test_stress, y_pred_stress)
+        stress_rmse = np.sqrt(mean_squared_error(y_test_stress, y_pred_stress))
+        stress_r2 = r2_score(y_test_stress, y_pred_stress)
         
         # Train time model
-        time_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        time_model.fit(X_train, y_time_train)
+        y_time = df['total_time']
+        X_train_time, X_test_time, y_train_time, y_test_time = train_test_split(
+            X, y_time, test_size=0.2, random_state=42
+        )
         
-        y_time_pred = time_model.predict(X_test)
-        mae_time = mean_absolute_error(y_time_test, y_time_pred)
-        r2_time = r2_score(y_time_test, y_time_pred)
+        time_model = Ridge(alpha=1.0)
+        time_model.fit(X_train_time, y_train_time)
+        
+        y_pred_time = time_model.predict(X_test_time)
+        time_mae = mean_absolute_error(y_test_time, y_pred_time)
+        time_rmse = np.sqrt(mean_squared_error(y_test_time, y_pred_time))
+        time_r2 = r2_score(y_test_time, y_pred_time)
         
         path_types = sorted(df['path_type'].unique().tolist())
         
         return {
-            'model': stress_model,
+            'stress_model': stress_model,
             'time_model': time_model,
             'encoder': encoder,
             'feature_cols': feature_cols,
             'path_types': path_types,
-            'mae': mae_stress,
-            'rmse': rmse_stress,
-            'r2': r2_stress,
-            'time_mae': mae_time,
-            'time_r2': r2_time,
+            'stress_mae': stress_mae,
+            'stress_rmse': stress_rmse,
+            'stress_r2': stress_r2,
+            'time_mae': time_mae,
+            'time_rmse': time_rmse,
+            'time_r2': time_r2,
             'training_samples': len(df)
         }
         
     except Exception as e:
-        st.error(f"Error training model: {e}")
+        st.error(f"Error training models: {e}")
         return None
 
-with st.spinner("Loading ML model..."):
-    model_data = load_pretrained_model()
+with st.spinner("Training ML models from data..."):
+    model_data = train_ml_models_from_csv()
 
 if model_data is None:
-    st.error("❌ Failed to load or train model. Please check your CSV file.")
     st.stop()
 
-ml_model = model_data['model']
-time_model = model_data.get('time_model', None)
+stress_model = model_data['stress_model']
+time_model = model_data['time_model']
 encoder = model_data['encoder']
 feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
-
-# Show model status
-if time_model is not None:
-    st.success("✅ Both stress and time prediction models are active!")
-else:
-    st.error("❌ Time model failed to load. This shouldn't happen - please check the CSV file has 'total_time' column.")
-
-def analyze_failure_patterns(df):
-    """Analyze failed simulations to identify problematic parameter ranges"""
-    failed = df[df['status'] != 'SUCCESS'].copy()
-    
-    if len(failed) == 0:
-        return None
-    
-    analysis = {
-        'total_failures': len(failed),
-        'failure_by_path': failed['path_type'].value_counts().to_dict(),
-        'depth_failures': failed['depth_input_mm'].describe().to_dict(),
-        'common_issues': []
-    }
-    
-    if len(failed) > 0:
-        high_depth_fails = failed[failed['depth_input_mm'] > 6.0]
-        if len(high_depth_fails) > 0:
-            analysis['common_issues'].append(f"High failure rate for depth > 6mm ({len(high_depth_fails)} cases)")
-        
-        failed_with_radius = failed.dropna(subset=['param_radius'])
-        if len(failed_with_radius) > 0:
-            small_radius_fails = failed_with_radius[failed_with_radius['param_radius'] < 6]
-            if len(small_radius_fails) > 0:
-                analysis['common_issues'].append(f"High failure rate for radius < 6mm ({len(small_radius_fails)} cases)")
-    
-    return analysis
-
-def validate_parameters(geometry, depth, base_radius, path_type):
-    """Validate user parameters against known failure patterns"""
-    warnings = []
-    
-    if depth > 7.0:
-        warnings.append("WARNING: Depth > 7mm has high failure rate in simulations")
-    elif depth > 6.0:
-        warnings.append("CAUTION: Depth > 6mm may be unstable for some path types")
-    
-    if base_radius < 25:
-        warnings.append("WARNING: Small base radius (< 25mm) increases failure risk")
-    
-    if path_type in ['spiral', 'spiral_inward'] and depth > 6.5:
-        warnings.append("WARNING: Spiral paths often fail with depth > 6.5mm")
-    
-    if path_type == 'figure8' and depth > 5.0:
-        warnings.append("CAUTION: Figure-8 path has limited success at depths > 5mm")
-    
-    if geometry == 'cone' and depth > 6.0 and base_radius < 30:
-        warnings.append("WARNING: Steep cone geometry (high depth, small radius) prone to failure")
-    
-    if geometry == 'pyramid' and base_radius < 25:
-        warnings.append("CAUTION: Small pyramid base may cause convergence issues")
-    
-    is_valid = len([w for w in warnings if w.startswith('WARNING')]) == 0
-    
-    return is_valid, warnings
 
 GEOMETRY_PATH_RECOMMENDATIONS = {
     'cone': {
@@ -342,10 +220,8 @@ def parse_dynain_file(uploaded_file):
             'error': str(e)
         }
 
-def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
+def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
     path_encoded = encoder.transform([path_type])[0]
-    
-    expected_features = feature_cols
     
     features = {
         'depth': depth,
@@ -353,85 +229,43 @@ def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0,
         'param_radius_filled': param_radius,
         'param_max_radius_filled': param_max_radius,
         'param_side_length_filled': param_side_length,
-        'param_amplitude_filled': param_amplitude,
         'depth_squared': depth ** 2,
         'radius_squared': param_radius ** 2,
-        'max_radius_squared': param_max_radius ** 2,
-        'amplitude_squared': param_amplitude ** 2,
+        'max_radius_squared': param_max_radius ** 2
     }
     
-    feature_array = np.array([[features.get(col, 0.0) for col in expected_features]])
+    feature_array = np.array([[features[col] for col in feature_cols]])
     return feature_array
 
-def predict_stress(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
+def predict_stress_and_time(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
+    """Predict both stress and time for a given path configuration"""
     features = prepare_features(path_type, depth, param_radius, param_max_radius, param_side_length)
-    stress_prediction = ml_model.predict(features)[0]
-    return stress_prediction
-
-def predict_time(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
-    """Predict forming time based on path and depth"""
-    if time_model is None:
-        # Fallback: return average time
-        return 60.0
-    
-    features = prepare_features(path_type, depth, param_radius, param_max_radius, param_side_length, param_amplitude)
+    stress_prediction = stress_model.predict(features)[0]
     time_prediction = time_model.predict(features)[0]
-    return time_prediction
+    return stress_prediction, time_prediction
 
-def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0, optimization_weight=0.5):
-    """
-    Find optimal path considering both stress and time
-    optimization_weight: 0.0 = only time, 0.5 = balanced, 1.0 = only stress
-    """
+def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
     recommended_paths = GEOMETRY_PATH_RECOMMENDATIONS[geometry]['recommended_paths']
     
     predictions = {}
-    times = {}
-    scores = {}
-    errors = {}
-    
     for path in recommended_paths:
         try:
-            stress = predict_stress(path, depth, param_radius, param_max_radius, param_side_length, param_amplitude)
-            time = predict_time(path, depth, param_radius, param_max_radius, param_side_length, param_amplitude)
-            
-            predictions[path] = stress
-            times[path] = time
-            
-        except Exception as e:
-            errors[path] = str(e)
+            stress, time = predict_stress_and_time(path, depth, param_radius, param_max_radius, param_side_length)
+            predictions[path] = {'stress': stress, 'time': time}
+        except:
+            predictions[path] = None
     
-    valid_predictions = {k: v for k, v in predictions.items() if k not in errors}
+    valid_predictions = {k: v for k, v in predictions.items() if v is not None}
     
     if not valid_predictions:
-        st.error("No valid predictions generated!")
-        return None, None, None, {}, {}
+        return None, None, None, {}
     
-    # Normalize stress (lower is better) - scale to 0-1
-    min_stress = min(valid_predictions.values())
-    max_stress = max(valid_predictions.values())
-    stress_range = max_stress - min_stress if max_stress > min_stress else 1.0
+    # Find best path (lowest stress)
+    best_path = min(valid_predictions, key=lambda k: valid_predictions[k]['stress'])
+    best_stress = valid_predictions[best_path]['stress']
+    best_time = valid_predictions[best_path]['time']
     
-    # Normalize time (lower is better) - scale to 0-1
-    valid_times = {k: v for k, v in times.items() if k in valid_predictions}
-    min_time = min(valid_times.values())
-    max_time = max(valid_times.values())
-    time_range = max_time - min_time if max_time > min_time else 1.0
-    
-    # Calculate combined score for each path
-    for path in valid_predictions.keys():
-        stress_norm = (valid_predictions[path] - min_stress) / stress_range if stress_range > 0 else 0
-        time_norm = (valid_times[path] - min_time) / time_range if time_range > 0 else 0
-        
-        # Combined score (lower is better)
-        scores[path] = optimization_weight * stress_norm + (1 - optimization_weight) * time_norm
-    
-    # Find best path (minimum combined score)
-    best_path = min(scores, key=scores.get)
-    best_stress = valid_predictions[best_path]
-    best_time = valid_times[best_path]
-    
-    return best_path, best_stress, best_time, valid_predictions, valid_times
+    return best_path, best_stress, best_time, valid_predictions
 
 def calculate_num_layers(depth, step_down=0.5):
     return max(int(np.ceil(depth / step_down)), 3)
@@ -571,27 +405,9 @@ st.sidebar.header("Process Parameters")
 step_down = st.sidebar.slider("Layer Step Down (mm)", 0.2, 1.0, 0.5, 0.1, help="Depth increment per layer")
 num_points_per_layer = st.sidebar.slider("Points per Layer", 50, 200, 100, 10)
 
-st.sidebar.header("Optimization Strategy")
-optimization_weight = st.sidebar.slider(
-    "Optimization Priority",
-    min_value=0.0,
-    max_value=1.0,
-    value=0.5,
-    step=0.1,
-    help="0 = Minimum Time Only | 0.5 = Balanced | 1.0 = Minimum Stress Only"
-)
-
-if optimization_weight < 0.3:
-    st.sidebar.info("⚡ **Time-Optimized**: Fastest forming path")
-elif optimization_weight > 0.7:
-    st.sidebar.info("🔧 **Stress-Optimized**: Lowest stress path")
-else:
-    st.sidebar.info("⚖️ **Balanced**: Optimal stress-time tradeoff")
-
 param_radius = 10.0
 param_max_radius = 15.0
 param_side_length = 12.0
-param_amplitude = 5.0
 
 st.sidebar.header("Visualization")
 show_comparison = st.sidebar.checkbox("Show Path Comparison", value=True)
@@ -621,54 +437,19 @@ generate = st.sidebar.button("Generate Optimal Path", type="primary", use_contai
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Model Information")
+st.sidebar.info(f"""
+**Stress Model:**  
+- R² Score: {model_data['stress_r2']:.3f}  
+- RMSE: {model_data['stress_rmse']:.2f} MPa
 
-model_type = type(ml_model).__name__
-model_info_text = f"""
-**Stress Model:** {model_type}  
-**Time Model:** {'RandomForestRegressor' if time_model else 'Not Available'}  
-**Training Samples:** {model_data['training_samples']}  
-**Stress R²:** {model_data['r2']:.3f}  
-**Time R²:** {model_data.get('time_r2', 0):.3f}  
-**Stress RMSE:** {model_data['rmse']:.2f} MPa  
-**Time MAE:** {model_data.get('time_mae', 0):.2f}s
+**Time Model:**  
+- R² Score: {model_data['time_r2']:.3f}  
+- RMSE: {model_data['time_rmse']:.2f} sec
 
-**Note:** Both stress and time predictions based on path + depth.
-"""
-st.sidebar.info(model_info_text)
+**Training Samples:** {model_data['training_samples']}
+""")
 
 if generate:
-    temp_best_path, _, _, _, _ = find_best_path_for_geometry(
-        geometry_input, depth_input, param_radius, param_max_radius, base_radius, param_amplitude, optimization_weight
-    )
-    
-    is_valid, warnings = validate_parameters(geometry_input, depth_input, base_radius, temp_best_path if temp_best_path else 'circular')
-    
-    if warnings:
-        st.warning("### Parameter Validation Warnings")
-        for warning in warnings:
-            if warning.startswith('WARNING'):
-                st.error(warning)
-            else:
-                st.warning(warning)
-        
-        if not is_valid:
-            st.error("""
-            **High Risk Configuration Detected!**
-            
-            These parameters have shown high failure rates in FEM simulations.
-            Consider adjusting depth or radius before proceeding.
-            """)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Adjust Parameters", type="primary"):
-                    st.info("Please adjust the parameters in the sidebar")
-                    st.stop()
-            with col2:
-                proceed = st.button("Continue Anyway", type="secondary")
-                if not proceed:
-                    st.stop()
-    
     st.markdown(f"""
     <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:1.5rem;border-radius:15px;color:white;font-size:1.1rem;text-align:center;margin:1rem 0;">
         TARGET GEOMETRY: <strong>{geometry_input.upper().replace('_', ' ')}</strong><br>
@@ -677,8 +458,8 @@ if generate:
     """, unsafe_allow_html=True)
     
     with st.spinner("Finding optimal tool path..."):
-        best_path, best_stress, best_time, all_predictions, all_times = find_best_path_for_geometry(
-            geometry_input, depth_input, param_radius, param_max_radius, base_radius, param_amplitude, optimization_weight
+        best_path, best_stress, best_time, all_predictions = find_best_path_for_geometry(
+            geometry_input, depth_input, param_radius, param_max_radius, base_radius
         )
     
     if best_path is None:
@@ -690,13 +471,13 @@ if generate:
     st.markdown(f"""
     <div style="background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);padding:2rem;border-radius:15px;color:white;font-size:1.3rem;font-weight:bold;text-align:center;margin:1rem 0;">
         RECOMMENDED TOOL PATH: <strong>{best_path.upper()}</strong><br>
-        Predicted Stress: {best_stress:.2f} MPa | Forming Time: {best_time:.1f}s | Layers: {num_layers}
+        Predicted Stress: {best_stress:.2f} MPa | Predicted Time: {best_time:.1f} sec | Layers: {num_layers}
     </div>
     """, unsafe_allow_html=True)
     
     st.subheader("Process Overview")
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
         st.metric("Tool Path", best_path.title())
@@ -705,12 +486,15 @@ if generate:
         st.metric("Max Stress", f"{best_stress:.2f} MPa")
     
     with col3:
-        st.metric("Forming Time", f"{best_time:.1f}s")
+        st.metric("Process Time", f"{best_time:.1f} sec")
     
     with col4:
         st.metric("Total Layers", num_layers)
     
     with col5:
+        st.metric("Step Down", f"{step_down} mm")
+    
+    with col6:
         safety_factor = 250 / best_stress if best_stress > 0 else 0
         st.metric(
             "Safety Factor",
@@ -739,107 +523,86 @@ if generate:
         st.subheader(f"Complete Tool Movement - {best_path.upper()} Path for {geometry_input.upper()}")
         st.markdown(f"**Showing all {num_layers} layers** with tool retractions between passes")
         
-        try:
-            x, y, z, layers = generate_complete_tool_path(
-                best_path, geometry_input, depth_input, base_radius, num_points_per_layer
-            )
-            
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                # Layer-based coloring only
-                layer_colors = []
-                for i in range(len(z)):
-                    layer_num = int(-z[i] / (depth_input / num_layers))
-                    layer_colors.append(layer_num)
-                
-                fig = go.Figure(data=[go.Scatter3d(
-                    x=x, y=y, z=z,
-                    mode='lines',
-                    line=dict(
-                        color=layer_colors,
-                        colorscale='Viridis',
-                        width=3,
-                        colorbar=dict(title="Layer")
-                    ),
-                    name='Tool Path',
-                    hovertemplate=(
-                        '<b>Position</b><br>' +
-                        'X: %{x:.2f} mm<br>' +
-                        'Y: %{y:.2f} mm<br>' +
-                        'Z: %{z:.2f} mm<br>' +
-                        '<b>Layer:</b> %{marker.color:.0f}<br>' +
-                        '<extra></extra>'
-                    )
-                )])
-                
-                fig.update_layout(
-                    title=f"Complete {num_layers}-Layer Tool Path",
-                    scene=dict(
-                        xaxis_title="X (mm)",
-                        yaxis_title="Y (mm)",
-                        zaxis_title="Z (mm)",
-                        aspectmode='cube',
-                        camera=dict(eye=dict(x=1.5, y=1.5, z=1.2))
-                    ),
-                    height=700
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.markdown("#### Path Statistics")
-                st.metric("Total Points", len(x))
-                st.metric("Total Layers", num_layers)
-                st.metric("Points per Layer", num_points_per_layer)
-                st.metric("Max Depth", f"{depth_input:.2f} mm")
-                st.metric("Base Radius", f"{base_radius:.1f} mm")
-                
-                st.markdown("#### Performance Metrics")
-                st.metric("Predicted Stress", f"{best_stress:.1f} MPa")
-                st.metric("Forming Time", f"{best_time:.1f}s")
-                st.metric("Safety Factor", f"{safety_factor:.2f}")
-                
-                st.markdown("#### Layer Information")
-                st.write(f"**Step Down:** {step_down} mm")
-                st.write(f"**Path Type:** {best_path}")
-                st.write(f"**Geometry:** {geometry_input.title()}")
-                
-                path_df = pd.DataFrame({
-                    'X': x, 
-                    'Y': y, 
-                    'Z': z
-                })
-                csv = path_df.to_csv(index=False)
-                st.download_button(
-                    "Download Path Data",
-                    csv,
-                    f"{geometry_input}_{best_path}_path.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
+        x, y, z, layers = generate_complete_tool_path(
+            best_path, geometry_input, depth_input, base_radius, num_points_per_layer
+        )
         
-        except Exception as e:
-            st.error(f"Error generating visualization: {e}")
-            import traceback
-            st.code(traceback.format_exc())
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            layer_colors = []
+            for i in range(len(z)):
+                layer_num = int(-z[i] / (depth_input / num_layers))
+                layer_colors.append(layer_num)
+            
+            fig = go.Figure(data=[go.Scatter3d(
+                x=x, y=y, z=z,
+                mode='lines',
+                line=dict(
+                    color=layer_colors,
+                    colorscale='Viridis',
+                    width=3,
+                    colorbar=dict(title="Layer")
+                ),
+                name='Tool Path'
+            )])
+            
+            fig.update_layout(
+                title=f"Complete {num_layers}-Layer Tool Path",
+                scene=dict(
+                    xaxis_title="X (mm)",
+                    yaxis_title="Y (mm)",
+                    zaxis_title="Z (mm)",
+                    aspectmode='cube',
+                    camera=dict(eye=dict(x=1.5, y=1.5, z=1.2))
+                ),
+                height=700
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### Path Statistics")
+            st.metric("Total Points", len(x))
+            st.metric("Total Layers", num_layers)
+            st.metric("Points per Layer", num_points_per_layer)
+            st.metric("Max Depth", f"{depth_input:.2f} mm")
+            st.metric("Base Radius", f"{base_radius:.1f} mm")
+            
+            st.markdown("#### Performance Predictions")
+            st.metric("Predicted Stress", f"{best_stress:.2f} MPa")
+            st.metric("Predicted Time", f"{best_time:.1f} sec")
+            time_per_layer = best_time / num_layers
+            st.metric("Time per Layer", f"{time_per_layer:.2f} sec")
+            
+            st.markdown("#### Layer Information")
+            st.write(f"**Step Down:** {step_down} mm")
+            st.write(f"**Path Type:** {best_path}")
+            st.write(f"**Geometry:** {geometry_input.title()}")
+            
+            path_df = pd.DataFrame({'X': x, 'Y': y, 'Z': z})
+            csv = path_df.to_csv(index=False)
+            st.download_button(
+                "Download Complete Path",
+                csv,
+                f"{geometry_input}_{best_path}_path.csv",
+                "text/csv",
+                use_container_width=True
+            )
     
     with tab2:
         st.subheader("Tool Path Comparison for Target Geometry")
         
         if show_comparison and all_predictions:
-            comp_df = pd.DataFrame([
-                {
-                    "Path Type": k, 
-                    "Stress (MPa)": all_predictions[k],
-                    "Time (s)": all_times.get(k, 0)
-                }
-                for k in all_predictions.keys()
-            ]).sort_values("Stress (MPa)")
+            comp_data = []
+            for k, v in all_predictions.items():
+                comp_data.append({
+                    "Path Type": k,
+                    "Predicted Stress (MPa)": v['stress'],
+                    "Predicted Time (sec)": v['time'],
+                    "Status": 'Best' if k == best_path else 'Valid'
+                })
             
-            comp_df['Status'] = comp_df['Path Type'].apply(
-                lambda x: '⭐ Best' if x == best_path else 'Valid'
-            )
+            comp_df = pd.DataFrame(comp_data).sort_values("Predicted Stress (MPa)")
             
             col1, col2 = st.columns([2, 1])
             
@@ -849,7 +612,7 @@ if generate:
                 
                 fig.add_trace(go.Bar(
                     x=comp_df['Path Type'],
-                    y=comp_df['Stress (MPa)'],
+                    y=comp_df['Predicted Stress (MPa)'],
                     name='Stress (MPa)',
                     marker_color='lightblue',
                     yaxis='y'
@@ -857,29 +620,34 @@ if generate:
                 
                 fig.add_trace(go.Scatter(
                     x=comp_df['Path Type'],
-                    y=comp_df['Time (s)'],
-                    name='Time (s)',
-                    mode='lines+markers',
-                    marker=dict(size=10, color='red'),
-                    line=dict(color='red', width=2),
-                    yaxis='y2'
+                    y=comp_df['Predicted Time (sec)'],
+                    name='Time (sec)',
+                    marker=dict(color='red', size=10),
+                    yaxis='y2',
+                    mode='lines+markers'
                 ))
                 
                 fig.update_layout(
-                    title=f'Stress & Time Comparison for {geometry_input.upper()} Geometry',
+                    title=f'Stress and Time Predictions for {geometry_input.upper()} Geometry',
                     xaxis=dict(title='Path Type'),
-                    yaxis=dict(title='Stress (MPa)', side='left'),
-                    yaxis2=dict(title='Forming Time (s)', side='right', overlaying='y'),
+                    yaxis=dict(
+                        title='Predicted Stress (MPa)',
+                        side='left'
+                    ),
+                    yaxis2=dict(
+                        title='Predicted Time (sec)',
+                        overlaying='y',
+                        side='right'
+                    ),
                     height=500,
-                    hovermode='x unified'
+                    hovermode='x'
                 )
-                
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
-                st.markdown("#### Ranking")
+                st.markdown("#### Ranking by Stress")
                 st.dataframe(
-                    comp_df[['Path Type', 'Stress (MPa)', 'Time (s)', 'Status']],
+                    comp_df[['Path Type', 'Predicted Stress (MPa)', 'Predicted Time (sec)', 'Status']],
                     hide_index=True,
                     use_container_width=True
                 )
@@ -888,10 +656,19 @@ if generate:
                 st.info(f"""
                 For **{geometry_input}** geometry:
                 - Best path: **{best_path}**
-                - Stress: **{best_stress:.2f} MPa**
-                - Time: **{best_time:.1f}s**
-                - Optimization: **{int(optimization_weight*100)}% stress, {int((1-optimization_weight)*100)}% time**
+                - Lowest stress: **{best_stress:.2f} MPa**
+                - Process time: **{best_time:.1f} sec**
+                - {len(comp_df)} paths evaluated
                 """)
+                
+                # Find fastest path
+                fastest_path = min(all_predictions.items(), key=lambda x: x[1]['time'])
+                if fastest_path[0] != best_path:
+                    st.warning(f"""
+                    **Note:** Fastest path is **{fastest_path[0]}** 
+                    ({fastest_path[1]['time']:.1f} sec) but with higher 
+                    stress ({fastest_path[1]['stress']:.2f} MPa)
+                    """)
         else:
             st.info("Enable 'Show Path Comparison' to see all options.")
     
@@ -906,9 +683,10 @@ if generate:
             with col1:
                 st.markdown("### ML Prediction")
                 st.metric("Predicted Stress", f"{best_stress:.2f} MPa")
-                st.metric("Predicted Time", f"{best_time:.1f}s")
+                st.metric("Predicted Time", f"{best_time:.1f} sec")
                 st.metric("Target Depth", f"{depth_input:.2f} mm")
-                st.info("Based on trained Random Forest model")
+                st.metric("Base Radius", f"{base_radius:.1f} mm")
+                st.info("Based on trained Ridge regression models")
             
             with col2:
                 st.markdown("### FEM Simulation")
@@ -916,6 +694,8 @@ if generate:
                 st.metric("Nodes", f"{fem_data['num_nodes']:,}")
                 if 'actual_depth' in fem_data:
                     st.metric("Actual Depth", f"{fem_data['actual_depth']:.2f} mm")
+                if 'mean_thickness' in fem_data:
+                    st.metric("Mean Thickness", f"{fem_data['mean_thickness']:.4f} mm")
                 st.success("Physics-based simulation results")
             
             with col3:
@@ -930,9 +710,45 @@ if generate:
                         delta=f"Error: {depth_error:.2f} mm"
                     )
                 
-                st.info("Full stress comparison requires complete stress tensor extraction from dynain.txt")
+                st.info("Full stress and time comparison requires complete data extraction from FEM results")
             
             st.markdown("---")
+            
+            st.markdown("#### Detailed Comparison")
+            
+            comparison_data = {
+                "Parameter": ["Target Depth", "Predicted Stress", "Predicted Time", "Number of Elements", "Number of Nodes"],
+                "ML Input/Prediction": [
+                    f"{depth_input:.2f} mm",
+                    f"{best_stress:.2f} MPa",
+                    f"{best_time:.1f} sec",
+                    "N/A",
+                    "N/A"
+                ],
+                "FEM Output": [
+                    f"{fem_data.get('actual_depth', 0):.2f} mm" if 'actual_depth' in fem_data else "N/A",
+                    "Requires extraction",
+                    "Requires extraction",
+                    f"{fem_data['num_elements']:,}",
+                    f"{fem_data['num_nodes']:,}"
+                ],
+                "Match Status": [
+                    "✓" if 'actual_depth' in fem_data and abs(depth_input - fem_data['actual_depth']) < 0.5 else "✗",
+                    "Pending",
+                    "Pending",
+                    "N/A",
+                    "N/A"
+                ]
+            }
+            
+            if 'mean_thickness' in fem_data:
+                comparison_data["Parameter"].append("Mean Thickness")
+                comparison_data["ML Input/Prediction"].append("Predicted")
+                comparison_data["FEM Output"].append(f"{fem_data['mean_thickness']:.4f} mm")
+                comparison_data["Match Status"].append("Data available")
+            
+            comp_df = pd.DataFrame(comparison_data)
+            st.dataframe(comp_df, hide_index=True, use_container_width=True)
             
             if 'actual_depth' in fem_data:
                 st.markdown("#### Depth Comparison")
@@ -954,6 +770,42 @@ if generate:
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown("#### Export Comparison")
+            
+            report_text = f"""
+SMART INCREMENTAL FORMING - ML vs FEM COMPARISON REPORT
+
+Target Geometry: {geometry_input.upper()}
+Recommended Tool Path: {best_path.upper()}
+
+ML PREDICTION:
+- Predicted Stress: {best_stress:.2f} MPa
+- Predicted Time: {best_time:.1f} sec
+- Target Depth: {depth_input:.2f} mm
+- Base Radius: {base_radius:.1f} mm
+- Number of Layers: {num_layers}
+
+FEM SIMULATION:
+- Elements: {fem_data['num_elements']:,}
+- Nodes: {fem_data['num_nodes']:,}
+- Actual Depth: {fem_data.get('actual_depth', 0):.2f} mm
+- Mean Thickness: {fem_data.get('mean_thickness', 0):.4f} mm
+
+VALIDATION:
+- Depth Match: {abs(depth_input - fem_data.get('actual_depth', 0)) < 0.5}
+- Depth Error: {abs(depth_input - fem_data.get('actual_depth', 0)):.2f} mm
+
+Generated: {pd.Timestamp.now()}
+"""
+            
+            st.download_button(
+                "Download Comparison Report",
+                report_text,
+                f"ml_fem_comparison_{geometry_input}.txt",
+                "text/plain",
+                use_container_width=True
+            )
     
     process_details_tab = tab4 if fem_data is not None else tab3
     with process_details_tab:
@@ -977,19 +829,66 @@ if generate:
         with col2:
             st.markdown("#### Predicted Performance")
             st.write(f"**Max Stress:** {best_stress:.2f} MPa")
-            st.write(f"**Forming Time:** {best_time:.1f}s")
+            st.write(f"**Process Time:** {best_time:.1f} sec")
             st.write(f"**Safety Factor:** {safety_factor:.2f}")
-            st.write(f"**Optimization Weight:** {int(optimization_weight*100)}% Stress, {int((1-optimization_weight)*100)}% Time")
+            st.write(f"**Time per Layer:** {best_time/num_layers:.2f} sec")
             
             st.markdown("#### ML Model Info")
-            st.write(f"**Algorithm:** {type(ml_model).__name__}")
+            st.write(f"**Algorithm:** Ridge Regression")
             st.write(f"**Training Data:** {model_data['training_samples']} samples")
-            st.write(f"**Model R-squared:** {model_data['r2']:.3f}")
-            st.write(f"**Model RMSE:** {model_data['rmse']:.2f} MPa")
+            st.write(f"**Stress Model R²:** {model_data['stress_r2']:.3f}")
+            st.write(f"**Time Model R²:** {model_data['time_r2']:.3f}")
             
             if fem_data is None:
                 st.markdown("---")
                 st.info("Upload dynain.txt in sidebar to compare ML predictions with FEM results")
+        
+        st.markdown("---")
+        st.markdown("#### Performance Summary Chart")
+        
+        # Create comprehensive summary chart
+        fig = go.Figure()
+        
+        fig.add_trace(go.Indicator(
+            mode="gauge+number+delta",
+            value=best_stress,
+            title={'text': "Max Stress (MPa)"},
+            delta={'reference': 250},
+            gauge={
+                'axis': {'range': [None, 350]},
+                'bar': {'color': "darkblue"},
+                'steps': [
+                    {'range': [0, 200], 'color': "lightgreen"},
+                    {'range': [200, 250], 'color': "yellow"},
+                    {'range': [250, 350], 'color': "red"}
+                ],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': 250
+                }
+            },
+            domain={'x': [0, 0.45], 'y': [0, 1]}
+        ))
+        
+        fig.add_trace(go.Indicator(
+            mode="number+delta",
+            value=best_time,
+            title={'text': "Process Time (sec)"},
+            delta={'reference': 60},
+            domain={'x': [0.55, 1], 'y': [0.5, 1]}
+        ))
+        
+        fig.add_trace(go.Indicator(
+            mode="number",
+            value=safety_factor,
+            title={'text': "Safety Factor"},
+            number={'suffix': "x"},
+            domain={'x': [0.55, 1], 'y': [0, 0.45]}
+        ))
+        
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
 
 else:
     st.info("""
@@ -997,10 +896,18 @@ else:
     
     1. **Select Target Geometry** - Choose the shape you want to create
     2. **Set Depth and Radius** - Define your target dimensions
-    3. **Adjust Optimization Priority** - Balance between stress and time
+    3. **Adjust Process Parameters** - Set layer step-down and points per layer
     4. **Generate Path** - Click the button to find the optimal tool path
     
-    The system will analyze all suitable paths and recommend the best one based on your optimization priority.
+    The system will analyze all suitable paths and recommend the best one based on **predicted stress and processing time**.
+    
+    ### What You'll Get
+    
+    - 🎯 **Optimal path recommendation** with lowest predicted stress
+    - ⏱️ **Processing time estimate** for each path option
+    - 📊 **Comprehensive comparison** of all suitable paths
+    - 📈 **3D visualization** of the complete multi-layer tool path
+    - 💾 **Downloadable path data** for CNC implementation
     """)
     
     st.markdown("### Available Geometries")
@@ -1011,4 +918,4 @@ else:
             st.caption(info['description'])
 
 st.markdown("---")
-st.caption("Smart Incremental Forming with ML | Multi-Objective Optimization (Stress + Time)")
+st.caption("Smart Incremental Forming with ML | Multi-Layer Path Generation with Stress & Time Prediction")
