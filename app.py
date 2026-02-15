@@ -68,11 +68,29 @@ def train_ml_model_from_csv():
         csv_path = SCRIPT_DIR / 'simulation_results_progress_0675.csv'
         df = pd.read_csv(csv_path)
         
+        # Show data statistics BEFORE filtering
+        total_rows = len(df)
+        st.info(f"📊 Total rows in CSV: {total_rows}")
+        
         # Analyze failure patterns
         failure_analysis = analyze_failure_patterns(df)
         
         df = df[df['status'] == 'SUCCESS'].copy()
+        successful_rows = len(df)
+        st.info(f"✅ Successful simulations: {successful_rows} ({successful_rows/total_rows*100:.1f}%)")
+        st.warning(f"❌ Failed/Other simulations: {total_rows - successful_rows} ({(total_rows - successful_rows)/total_rows*100:.1f}%)")
+        
         df = df.dropna(subset=['max_stress_MPa'])
+        final_rows = len(df)
+        
+        if final_rows < successful_rows:
+            st.warning(f"⚠️ Rows with missing stress data: {successful_rows - final_rows}")
+        
+        st.success(f"🎯 Final training samples: {final_rows}")
+        
+        if len(df) == 0:
+            st.error("No successful simulations found in CSV!")
+            return None
         
         df['depth'] = df['depth_input_mm']
         df['param_radius_filled'] = df['param_radius'].fillna(10.0)
@@ -561,13 +579,37 @@ st.sidebar.subheader("Model Information")
 model_type = type(ml_model).__name__
 model_info_text = f"""
 **Model Type:** {model_type}  
-**Training Samples:** {model_data['training_samples']}  
-**R² Score:** {model_data['r2']:.3f}  
-**RMSE:** {model_data['rmse']:.2f} MPa
+**Training Samples:** {model_data['training_samples']} (successful only)  
+**R² Score:** {model_data['r2']:.3f} (0=poor, 1=perfect)  
+**RMSE:** {model_data['rmse']:.2f} MPa (avg error)  
+**MAE:** {model_data.get('mae', 0):.2f} MPa
 
-**Note:** Predictions based on successful simulations only.
+**Note:** Only successful simulations with valid stress values are used for training.
 """
 st.sidebar.info(model_info_text)
+
+# Add expandable explanation
+with st.sidebar.expander("ℹ️ Understanding the Metrics"):
+    st.write("""
+    **Why only 197 samples?**
+    - Total simulations: 675
+    - Successful: ~197 (29%)
+    - Failed/Invalid: ~478 (71%)
+    - Only successful ones are used
+    
+    **RMSE (Root Mean Squared Error):**
+    - Units: MPa (same as stress)
+    - Average prediction error
+    - 13.76 MPa error is typical
+    - Lower is better
+    
+    **R² Score (0.702):**
+    - Measures model fit quality
+    - Range: 0 to 1
+    - 0.7 = Good predictive power
+    - 0.8+ = Very good
+    - 1.0 = Perfect predictions
+    """)
 
 if generate:
     # Validate parameters first
