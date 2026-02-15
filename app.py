@@ -83,32 +83,43 @@ def train_ml_model_from_csv():
         ]
         
         X = df[feature_cols]
-        y = df['max_stress_MPa']
+        y_stress = df['max_stress_MPa']
+        y_time = df['total_time']
         
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_train, X_test, y_stress_train, y_stress_test, y_time_train, y_time_test = train_test_split(
+            X, y_stress, y_time, test_size=0.2, random_state=42
+        )
         
-        model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        model.fit(X_train, y_train)
+        # Train stress model
+        stress_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        stress_model.fit(X_train, y_stress_train)
         
-        y_pred = model.predict(X_test)
-        mae = mean_absolute_error(y_test, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        r2 = r2_score(y_test, y_pred)
+        y_stress_pred = stress_model.predict(X_test)
+        mae_stress = mean_absolute_error(y_stress_test, y_stress_pred)
+        rmse_stress = np.sqrt(mean_squared_error(y_stress_test, y_stress_pred))
+        r2_stress = r2_score(y_stress_test, y_stress_pred)
+        
+        # Train time model
+        time_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        time_model.fit(X_train, y_time_train)
+        
+        y_time_pred = time_model.predict(X_test)
+        mae_time = mean_absolute_error(y_time_test, y_time_pred)
+        r2_time = r2_score(y_time_test, y_time_pred)
         
         path_types = sorted(df['path_type'].unique().tolist())
         
-        # Store time data for path optimization
-        time_data = df.groupby('path_type')['total_time'].mean().to_dict()
-        
         return {
-            'model': model,
+            'model': stress_model,
+            'time_model': time_model,
             'encoder': encoder,
             'feature_cols': feature_cols,
             'path_types': path_types,
-            'time_data': time_data,
-            'mae': mae,
-            'rmse': rmse,
-            'r2': r2,
+            'mae': mae_stress,
+            'rmse': rmse_stress,
+            'r2': r2_stress,
+            'time_mae': mae_time,
+            'time_r2': r2_time,
             'training_samples': len(df)
         }
         
@@ -123,10 +134,10 @@ if model_data is None:
     st.stop()
 
 ml_model = model_data['model']
+time_model = model_data.get('time_model', None)
 encoder = model_data['encoder']
 feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
-time_data = model_data.get('time_data', {})
 
 def analyze_failure_patterns(df):
     """Analyze failed simulations to identify problematic parameter ranges"""
@@ -326,6 +337,16 @@ def predict_stress(path_type, depth, param_radius=10.0, param_max_radius=15.0, p
     stress_prediction = ml_model.predict(features)[0]
     return stress_prediction
 
+def predict_time(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
+    """Predict forming time based on path and depth"""
+    if time_model is None:
+        # Fallback: return average time
+        return 60.0
+    
+    features = prepare_features(path_type, depth, param_radius, param_max_radius, param_side_length, param_amplitude)
+    time_prediction = time_model.predict(features)[0]
+    return time_prediction
+
 def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0, optimization_weight=0.5):
     """
     Find optimal path considering both stress and time
@@ -341,13 +362,10 @@ def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_ra
     for path in recommended_paths:
         try:
             stress = predict_stress(path, depth, param_radius, param_max_radius, param_side_length, param_amplitude)
-            time = time_data.get(path, 60.0)  # Default to 60 if not available
+            time = predict_time(path, depth, param_radius, param_max_radius, param_side_length, param_amplitude)
             
             predictions[path] = stress
             times[path] = time
-            
-            # Normalize stress and time to 0-1 range for comparison
-            # We'll do final normalization after collecting all values
             
         except Exception as e:
             errors[path] = str(e)
@@ -575,13 +593,15 @@ st.sidebar.subheader("Model Information")
 
 model_type = type(ml_model).__name__
 model_info_text = f"""
-**Model Type:** {model_type}  
+**Stress Model:** {model_type}  
+**Time Model:** {'RandomForestRegressor' if time_model else 'Not Available'}  
 **Training Samples:** {model_data['training_samples']}  
-**R² Score:** {model_data['r2']:.3f}  
-**RMSE:** {model_data['rmse']:.2f} MPa  
-**MAE:** {model_data.get('mae', 0):.2f} MPa
+**Stress R²:** {model_data['r2']:.3f}  
+**Time R²:** {model_data.get('time_r2', 0):.3f}  
+**Stress RMSE:** {model_data['rmse']:.2f} MPa  
+**Time MAE:** {model_data.get('time_mae', 0):.2f}s
 
-**Note:** Predictions based on successful simulations only.
+**Note:** Both stress and time predictions based on path + depth.
 """
 st.sidebar.info(model_info_text)
 
