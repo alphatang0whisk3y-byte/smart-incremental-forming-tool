@@ -435,20 +435,6 @@ if uploaded_dynain is not None:
 
 generate = st.sidebar.button("Generate Optimal Path", type="primary", use_container_width=True)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("Model Information")
-st.sidebar.info(f"""
-**Stress Model:**  
-- R² Score: {model_data['stress_r2']:.3f}  
-- RMSE: {model_data['stress_rmse']:.2f} MPa
-
-**Time Model:**  
-- R² Score: {model_data['time_r2']:.3f}  
-- RMSE: {model_data['time_rmse']:.2f} sec
-
-**Training Samples:** {model_data['training_samples']}
-""")
-
 if generate:
     st.markdown(f"""
     <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:1.5rem;border-radius:15px;color:white;font-size:1.1rem;text-align:center;margin:1rem 0;">
