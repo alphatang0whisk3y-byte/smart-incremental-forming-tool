@@ -25,7 +25,7 @@ SCRIPT_DIR = Path(__file__).parent.absolute() if '__file__' in globals() else Pa
 def load_pretrained_model():
     """Load the pre-trained model from pickle file"""
     model_path = SCRIPT_DIR / 'model_all_datasets.pkl'
-    csv_path = SCRIPT_DIR / 'simulation_results_progress_0675.csv'
+    csv_path = SCRIPT_DIR / 'simulation_results_FINAL_CORRECTED.csv'
     
     # Show debug info
     st.sidebar.write("**Debug Info:**")
@@ -65,7 +65,7 @@ def train_ml_model_from_csv():
     """Fallback: Train model from CSV if pkl file not available"""
     try:
         # Use absolute path
-        csv_path = SCRIPT_DIR / 'simulation_results_progress_0675.csv'
+        csv_path = SCRIPT_DIR / 'simulation_results_FINAL_CORRECTED.csv'
         df = pd.read_csv(csv_path)
         
         # Show data statistics BEFORE filtering
@@ -143,7 +143,7 @@ def train_ml_model_from_csv():
         
     except Exception as e:
         st.error(f"Error training model: {e}")
-        st.error(f"Looking for CSV at: {SCRIPT_DIR / 'simulation_results_progress_0675.csv'}")
+        st.error(f"Looking for CSV at: {SCRIPT_DIR / 'simulation_results_FINAL_CORRECTED.csv'}")
         st.error(f"Current directory: {SCRIPT_DIR}")
         st.error(f"Files in directory: {list(SCRIPT_DIR.glob('*'))}")
         return None
