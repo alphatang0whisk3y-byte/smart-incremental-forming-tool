@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import pickle
+import os
+from pathlib import Path
 from sklearn.preprocessing import LabelEncoder
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import train_test_split
@@ -15,12 +17,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Get the directory where this script is located
+SCRIPT_DIR = Path(__file__).parent.absolute() if '__file__' in globals() else Path.cwd()
+
 @st.cache_resource
 def load_pretrained_model():
     """Load the pre-trained model from pickle file"""
     try:
-        # Try loading pre-trained model first
-        with open('model_675_only.pkl', 'rb') as f:
+        # Use absolute path
+        model_path = SCRIPT_DIR / 'model_675_only.pkl'
+        with open(model_path, 'rb') as f:
             model_data = pickle.load(f)
         
         st.success(f"Loaded pre-trained model: R² = {model_data['r2']:.3f}, MAE = {model_data['mae']:.2f} MPa")
@@ -38,18 +44,9 @@ def load_pretrained_model():
 def train_ml_model_from_csv():
     """Fallback: Train model from CSV if pkl file not available"""
     try:
-       import os
-
-DATA_FILE = "simulation_results_progress_0675.csv"
-
-if not os.path.exists(DATA_FILE):
-    st.error(f"❌ CSV file not found: {DATA_FILE}")
-    st.info("📂 Files in current directory:")
-    st.code(os.listdir("."))
-    st.stop()
-
-df = pd.read_csv(DATA_FILE)
-
+        # Use absolute path
+        csv_path = SCRIPT_DIR / 'simulation_results_progress_0675.csv'
+        df = pd.read_csv(csv_path)
         
         # Analyze failure patterns
         failure_analysis = analyze_failure_patterns(df)
@@ -103,6 +100,9 @@ df = pd.read_csv(DATA_FILE)
         
     except Exception as e:
         st.error(f"Error training model: {e}")
+        st.error(f"Looking for CSV at: {SCRIPT_DIR / 'simulation_results_progress_0675.csv'}")
+        st.error(f"Current directory: {SCRIPT_DIR}")
+        st.error(f"Files in directory: {list(SCRIPT_DIR.glob('*'))}")
         return None
 
 with st.spinner("Loading ML model..."):
