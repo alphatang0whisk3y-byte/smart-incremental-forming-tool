@@ -78,10 +78,12 @@ def train_ml_model_from_csv():
         df['param_radius_filled'] = df['param_radius'].fillna(10.0)
         df['param_max_radius_filled'] = df['param_max_radius'].fillna(df['param_radius_filled'] * 1.5)
         df['param_side_length_filled'] = df['param_side_length'].fillna(12.0)
+        df['param_amplitude_filled'] = df['param_amplitude'].fillna(5.0) if 'param_amplitude' in df.columns else 5.0
         
         df['depth_squared'] = df['depth'] ** 2
         df['radius_squared'] = df['param_radius_filled'] ** 2
         df['max_radius_squared'] = df['param_max_radius_filled'] ** 2
+        df['amplitude_squared'] = df['param_amplitude_filled'] ** 2 if isinstance(df['param_amplitude_filled'], pd.Series) else 5.0 ** 2
         
         encoder = LabelEncoder()
         df['path_encoded'] = encoder.fit_transform(df['path_type'])
@@ -89,7 +91,9 @@ def train_ml_model_from_csv():
         feature_cols = [
             'depth', 'path_encoded', 'param_radius_filled', 
             'param_max_radius_filled', 'param_side_length_filled',
-            'depth_squared', 'radius_squared', 'max_radius_squared'
+            'param_amplitude_filled',
+            'depth_squared', 'radius_squared', 'max_radius_squared',
+            'amplitude_squared'
         ]
         
         X = df[feature_cols]
@@ -136,6 +140,12 @@ ml_model = model_data['model']
 encoder = model_data['encoder']
 feature_cols = model_data['feature_cols']
 path_types = model_data['path_types']
+
+# Show expected features in sidebar for debugging
+with st.sidebar.expander("🔍 Model Features"):
+    st.write("**Expected Features:**")
+    for i, feat in enumerate(feature_cols, 1):
+        st.write(f"{i}. {feat}")
 
 def analyze_failure_patterns(df):
     """Analyze failed simulations to identify problematic parameter ranges"""
@@ -319,36 +329,43 @@ def parse_dynain_file(uploaded_file):
             'error': str(e)
         }
 
-def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
+def prepare_features(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
     path_encoded = encoder.transform([path_type])[0]
     
+    # Check what features the model expects
+    expected_features = feature_cols
+    
+    # Prepare all possible features
     features = {
         'depth': depth,
         'path_encoded': path_encoded,
         'param_radius_filled': param_radius,
         'param_max_radius_filled': param_max_radius,
         'param_side_length_filled': param_side_length,
+        'param_amplitude_filled': param_amplitude,
         'depth_squared': depth ** 2,
         'radius_squared': param_radius ** 2,
-        'max_radius_squared': param_max_radius ** 2
+        'max_radius_squared': param_max_radius ** 2,
+        'amplitude_squared': param_amplitude ** 2,
     }
     
-    feature_array = np.array([[features[col] for col in feature_cols]])
+    # Only use features that the model expects
+    feature_array = np.array([[features.get(col, 0.0) for col in expected_features]])
     return feature_array
 
-def predict_stress(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
+def predict_stress(path_type, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
     features = prepare_features(path_type, depth, param_radius, param_max_radius, param_side_length)
     stress_prediction = ml_model.predict(features)[0]
     return stress_prediction
 
-def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0):
+def find_best_path_for_geometry(geometry, depth, param_radius=10.0, param_max_radius=15.0, param_side_length=12.0, param_amplitude=5.0):
     recommended_paths = GEOMETRY_PATH_RECOMMENDATIONS[geometry]['recommended_paths']
     
     predictions = {}
     errors = {}
     for path in recommended_paths:
         try:
-            stress = predict_stress(path, depth, param_radius, param_max_radius, param_side_length)
+            stress = predict_stress(path, depth, param_radius, param_max_radius, param_side_length, param_amplitude)
             predictions[path] = stress
         except Exception as e:
             predictions[path] = None
@@ -509,6 +526,7 @@ num_points_per_layer = st.sidebar.slider("Points per Layer", 50, 200, 100, 10)
 param_radius = 10.0
 param_max_radius = 15.0
 param_side_length = 12.0
+param_amplitude = 5.0  # Default amplitude value
 
 st.sidebar.header("Visualization")
 show_comparison = st.sidebar.checkbox("Show Path Comparison", value=True)
